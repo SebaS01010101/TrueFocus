@@ -1,244 +1,155 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { Play, Pause, RotateCcw, SkipForward, Coffee, Clock, Square } from 'lucide-react';
-import type { PomodoroTelemetry } from '../shared/types';
+import { Play, Pause, RotateCcw, SkipForward, Coffee, Clock, Square, Armchair } from 'lucide-react';
+import type { PomodoroTelemetry, PomodoroSettings } from '../shared/types';
 
-const WORK_TIME = 5;//25 * 60; 
-const BREAK_TIME = 5; //5 * 60; 
+interface PomodoroProps {
+  onCycleComplete?: () => void;
+  settings: PomodoroSettings; 
+  currentCycle: number;       
+}
 
 type TimerMode = 'WORK' | 'BREAK';
 
-function Pomodoro() {
-  const [timeLeft, setTimeLeft] = useState(WORK_TIME);
+function Pomodoro({ onCycleComplete, settings, currentCycle }: PomodoroProps) {
+  // Inicialización (esto está bien)
+  const [timeLeft, setTimeLeft] = useState(settings.workDuration * 60);
   const [isActive, setIsActive] = useState(false);
   const [mode, setMode] = useState<TimerMode>('WORK');
   
-  const totalTime = mode === 'WORK' ? WORK_TIME : BREAK_TIME;
+  // Lógica de descanso largo
+  const isLongBreak = mode === 'WORK' 
+    ? (currentCycle + 1) % 4 === 0 
+    : currentCycle > 0 && currentCycle % 4 === 0;
+  
+  // Calcular el tiempo que DEBERÍA tener el temporizador según la configuración actual
+  const targetTime = mode === 'WORK' 
+    ? settings.workDuration * 60 
+    : (isLongBreak ? settings.longBreakDuration * 60 : settings.shortBreakDuration * 60);
 
-  // 1. SOLICITAR PERMISO PARA NOTIFICACIONES AL CARGAR
+  // --- EFECTO CORREGIDO: Sincronización segura ---
   useEffect(() => {
-    if (Notification.permission !== 'granted') {
-      Notification.requestPermission();
+    // Solo actualizamos si NO está activo y si el tiempo es diferente (para evitar loops)
+    if (!isActive && timeLeft !== targetTime) {
+        // CORRECCIÓN: Usamos setTimeout para evitar "SetState synchronously in effect"
+        const timerId = setTimeout(() => {
+            setTimeLeft(targetTime);
+        }, 0);
+        return () => clearTimeout(timerId);
     }
-  }, []);
+  }, [targetTime, isActive, timeLeft]); 
 
-  // 2. FUNCIÓN PARA GENERAR SONIDO (Sin archivos externos)
-  const playNotificationSound = () => {
-    try {
-      const AudioContext = window.AudioContext || (window as any).webkitAudioContext;
-      if (!AudioContext) return;
-      
-      const ctx = new AudioContext();
-      const oscillator = ctx.createOscillator();
-      const gainNode = ctx.createGain();
-
-      oscillator.connect(gainNode);
-      gainNode.connect(ctx.destination);
-
-      // Configuración del sonido (un "ding" agradable)
-      oscillator.type = 'sine';
-      oscillator.frequency.setValueAtTime(500, ctx.currentTime);
-      oscillator.frequency.exponentialRampToValueAtTime(1000, ctx.currentTime + 0.1);
-      
-      gainNode.gain.setValueAtTime(0.1, ctx.currentTime);
-      gainNode.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.5);
-
-      oscillator.start();
-      oscillator.stop(ctx.currentTime + 0.5);
-    } catch (e) {
-      console.error("Audio error", e);
-    }
-  };
-
-  // 3. FUNCIÓN UNIFICADA DE NOTIFICACIÓN
+  // ... (Resto del código de notificaciones y lógica igual que antes) ...
+  useEffect(() => { if (Notification.permission !== 'granted') Notification.requestPermission(); }, []);
+  const playNotificationSound = () => { try { const AudioContext = window.AudioContext || (window as any).webkitAudioContext; if (AudioContext) { const ctx = new AudioContext(); const o = ctx.createOscillator(); const g = ctx.createGain(); o.connect(g); g.connect(ctx.destination); o.type='sine'; o.frequency.setValueAtTime(500, ctx.currentTime); g.gain.setValueAtTime(0.1, ctx.currentTime); g.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime+0.5); o.start(); o.stop(ctx.currentTime+0.5); } } catch(e){} };
+  
   const notifyUser = (message: string) => {
-    // Sonido
     playNotificationSound();
-
-    // Notificación visual de escritorio (No bloqueante)
-    if (Notification.permission === 'granted') {
-      new Notification('TrueFocus', {
-        body: message,
-        icon: '/vite.svg', // Usa el logo de tu app si tienes uno
-        silent: true // Silenciamos la nativa porque ya usamos nuestro propio sonido
-      });
-    }
+    if (Notification.permission === 'granted') new Notification('TrueFocus', { body: message, silent: true });
   };
 
   const sendPomodoroUpdate = useCallback((newStatus: PomodoroTelemetry['status'], time: number) => {
-    if (globalThis.api) {
-        globalThis.api.sendPomodoroUpdate({
-            status: newStatus,
-            timeLeft: time,
-            timestamp: Date.now()
-        });
-    }
+    if (globalThis.api) globalThis.api.sendPomodoroUpdate({ status: newStatus, timeLeft: time, timestamp: Date.now() });
   }, []);
 
-  // --- LÓGICA DE FINALIZACIÓN ---
   const handleTimerComplete = useCallback(() => {
     sendPomodoroUpdate('COMPLETED', 0);
     
-    const nextMode = mode === 'WORK' ? 'BREAK' : 'WORK';
-    const nextTime = nextMode === 'WORK' ? WORK_TIME : BREAK_TIME;
+    let nextMode: TimerMode = mode;
+    
+    if (mode === 'WORK') {
+      if (onCycleComplete) onCycleComplete();
+      nextMode = 'BREAK';
+      
+      const cyclesCompleted = currentCycle + 1;
+      const isLong = cyclesCompleted % 4 === 0;
+      
+      setTimeLeft(isLong ? settings.longBreakDuration * 60 : settings.shortBreakDuration * 60);
+      notifyUser(isLong ? "¡Gran trabajo! Toca descanso largo." : "Descanso corto.");
+    } else {
+      nextMode = 'WORK';
+      setTimeLeft(settings.workDuration * 60);
+      notifyUser("¡A trabajar!");
+    }
 
     setMode(nextMode);
-    setTimeLeft(nextTime);
-    
-    // CAMBIO: Usamos nuestra nueva función no bloqueante
-    const msg = nextMode === 'BREAK' 
-      ? "¡Buen trabajo! Es hora de un descanso de 5 minutos." 
-      : "Descanso terminado. ¡A concentrarse de nuevo!";
-      
-    notifyUser(msg);
+  }, [mode, sendPomodoroUpdate, onCycleComplete, settings, currentCycle]);
 
-  }, [mode, sendPomodoroUpdate]);
-
-  // Referencia mutable para el callback
   const handleTimerCompleteRef = useRef(handleTimerComplete);
-  
-  useEffect(() => {
-    handleTimerCompleteRef.current = handleTimerComplete;
-  }, [handleTimerComplete]);
+  useEffect(() => { handleTimerCompleteRef.current = handleTimerComplete; }, [handleTimerComplete]);
 
-  // --- EFECTO DEL TEMPORIZADOR ---
+  // Intervalo del reloj
   useEffect(() => {
     if (!isActive) return;
-
     const interval = setInterval(() => {
       setTimeLeft((prev) => {
         if (prev <= 1) {
-          // Ejecutamos la finalización en el siguiente ciclo de eventos para evitar loops
-          setTimeout(() => {
-             handleTimerCompleteRef.current();
-          }, 0);
+          setTimeout(() => { handleTimerCompleteRef.current(); }, 0);
           return 0;
         }
         return prev - 1;
       });
     }, 1000);
-
     return () => clearInterval(interval);
   }, [isActive]);
 
-  // --- CONTROLES ---
-  const toggleTimer = () => {
-    const nextState = !isActive;
-    setIsActive(nextState);
-    const newStatus = nextState ? 'RUNNING' : 'PAUSED';
-    sendPomodoroUpdate(newStatus, timeLeft);
-  };
-
-  const resetTimer = () => {
-    setIsActive(false);
-    setTimeLeft(totalTime);
-    sendPomodoroUpdate('IDLE', totalTime);
-  };
-
-  const skipTimer = () => {
-    const nextMode = mode === 'WORK' ? 'BREAK' : 'WORK';
-    const nextTime = nextMode === 'WORK' ? WORK_TIME : BREAK_TIME;
-    
-    setMode(nextMode);
-    setTimeLeft(nextTime);
+  const toggleTimer = () => { setIsActive(!isActive); sendPomodoroUpdate(!isActive?'RUNNING':'PAUSED', timeLeft); };
+  
+  const resetTimer = () => { 
     setIsActive(false); 
-    sendPomodoroUpdate('IDLE', nextTime);
+    setTimeLeft(targetTime); // Usamos la variable calculada
+    sendPomodoroUpdate('IDLE', targetTime); 
+  };
+  
+  const skipTimer = () => { 
+      const nextMode = mode === 'WORK' ? 'BREAK' : 'WORK';
+      setMode(nextMode);
+      
+      if (nextMode === 'WORK') {
+          setTimeLeft(settings.workDuration * 60);
+      } else {
+          // Lógica de skip manual
+          const isLong = (currentCycle + 1) % 4 === 0;
+          setTimeLeft(isLong ? settings.longBreakDuration * 60 : settings.shortBreakDuration * 60);
+      }
+      
+      setIsActive(false); 
+      sendPomodoroUpdate('IDLE', 0);
   };
 
-  const formatTime = (seconds: number) => {
-    const m = Math.floor(seconds / 60);
-    const s = seconds % 60;
-    return `${m < 10 ? '0' : ''}${m}:${s < 10 ? '0' : ''}${s}`;
-  };
-
-  const progressPercent = ((totalTime - timeLeft) / totalTime) * 100;
+  const formatTime = (s:number) => `${Math.floor(s/60).toString().padStart(2,'0')}:${(s%60).toString().padStart(2,'0')}`;
+  const progressPercent = ((targetTime - timeLeft) / targetTime) * 100;
 
   return (
-    <div className="glass-card rounded-3xl flex flex-col items-center w-full max-w-sm mx-auto p-6 mt-10">
-      
-      {/* HEADER: TABS */}
-      <div className="bg-primary-50/20 backdrop-blur-sm p-1 rounded-full flex items-center justify-between w-full mb-12 border border-white/10">
-        <button
-          onClick={() => { setMode('WORK'); setTimeLeft(WORK_TIME); setIsActive(false); }}
-          className={`flex items-center gap-2 px-6 py-2 rounded-full transition-all duration-300 ${
-            mode === 'WORK' 
-              ? 'bg-white text-brand-green-500 shadow-md font-bold' 
-              : 'text-primary-100 hover:text-white'
-          }`}
-        >
-          <Clock size={18} />
-          <span>Trabajo</span>
-        </button>
+     <div className="glass-card rounded-3xl flex flex-col items-center w-full p-5 mt-4 transition-all duration-300">
+        
+        {/* TABS */}
+        <div className="bg-primary-50/20 backdrop-blur-sm p-1 rounded-full flex items-center justify-between w-full mb-12 border border-white/10">
+            <button onClick={()=>{setMode('WORK');setTimeLeft(settings.workDuration*60);setIsActive(false)}} className={`flex items-center gap-2 px-6 py-2 rounded-full transition-all duration-300 ${mode==='WORK'?'bg-white text-brand-green-500 shadow-md font-bold':'text-primary-100 hover:text-white'}`}>
+                <Clock size={18}/><span>Trabajo</span>
+            </button>
+            <button onClick={()=>{setMode('BREAK');setTimeLeft(settings.shortBreakDuration*60);setIsActive(false)}} className={`flex items-center gap-2 px-6 py-2 rounded-full transition-all duration-300 ${mode==='BREAK'?'bg-white text-brand-green-500 shadow-md font-bold':'text-primary-100 hover:text-white'}`}>
+                <span>Descanso</span>
+                {isLongBreak ? <Armchair size={18}/> : <Coffee size={18}/>}
+            </button>
+        </div>
 
-        <button
-          onClick={() => { setMode('BREAK'); setTimeLeft(BREAK_TIME); setIsActive(false); }}
-          className={`flex items-center gap-2 px-6 py-2 rounded-full transition-all duration-300 ${
-            mode === 'BREAK' 
-              ? 'bg-white text-brand-green-500 shadow-md font-bold' 
-              : 'text-primary-100 hover:text-white'
-          }`}
-        >
-          <span>Descanso</span>
-          <Coffee size={18} />
-        </button>
-      </div>
-
-      {/* TIMER */}
-      <div className="mb-8 relative">
-        <h1 className="text-display font-bold text-white tracking-wider drop-shadow-lg">
-          {formatTime(timeLeft)}
-        </h1>
-      </div>
-
-      {/* PROGRESS BAR */}
-      <div className="w-full h-2 bg-white/10 rounded-full mb-12 overflow-hidden border border-white/5">
-        <div 
-          className="h-full bg-brand-green-400 transition-all duration-1000 ease-linear shadow-[0_0_10px_rgba(52,211,153,0.5)]"
-          style={{ width: `${progressPercent}%` }} 
-        />
-      </div>
-
-      {/* CONTROLS */}
-      <div className="flex items-center gap-6">
-        <button 
-          onClick={resetTimer}
-          className="w-14 h-14 bg-white rounded-full flex items-center justify-center text-primary-600 hover:bg-gray-100 transition shadow-lg hover:scale-105 active:scale-95"
-          title="Reiniciar"
-        >
-          <RotateCcw size={24} />
-        </button>
-
-        <button 
-          onClick={toggleTimer}
-          className={`
-            h-16 px-8 rounded-full flex items-center gap-3 shadow-xl hover:scale-105 active:scale-95 transition-all
-            ${isActive ? 'bg-brand-green-500 hover:bg-brand-green-400' : 'bg-brand-green-500 hover:bg-brand-green-400'}
-            text-white font-bold text-lg
-          `}
-        >
-          {isActive ? (
-            <>
-              <Square fill="currentColor" size={20} />
-              <span>Parar</span>
-            </>
-          ) : (
-            <>
-              <Play fill="currentColor" size={20} />
-              <span>Iniciar</span>
-            </>
-          )}
-        </button>
-
-        <button 
-          onClick={skipTimer}
-          className="w-14 h-14 bg-white rounded-full flex items-center justify-center text-primary-600 hover:bg-gray-100 transition shadow-lg hover:scale-105 active:scale-95"
-          title="Saltar"
-        >
-          <SkipForward fill="currentColor" size={24} />
-        </button>
-      </div>
-
-    </div>
+        {/* TIMER */}
+        <div className="mb-8 relative"><h1 className="text-display font-bold text-white tracking-wider drop-shadow-lg">{formatTime(timeLeft)}</h1></div>
+        
+        {/* BARRA */}
+        <div className="w-full h-2 bg-white/10 rounded-full mb-12 overflow-hidden border border-white/5">
+            <div className="h-full bg-brand-green-400 transition-all duration-1000 ease-linear shadow-[0_0_10px_rgba(52,211,153,0.5)]" style={{width:`${progressPercent}%`}}/>
+        </div>
+        
+        {/* CONTROLES */}
+        <div className="flex items-center gap-6">
+            <button onClick={resetTimer} className="w-12 h-12 bg-white rounded-full flex items-center justify-center text-primary-600 hover:bg-gray-100 transition shadow-lg hover:scale-105 active:scale-95"><RotateCcw size={24}/></button>
+            <button onClick={toggleTimer} className={`h-16 px-8 rounded-full flex items-center gap-3 shadow-xl hover:scale-105 active:scale-95 transition-all ${isActive?'bg-brand-green-500 hover:bg-brand-green-400':'bg-brand-green-500 hover:bg-brand-green-400'} text-white font-bold text-lg`}>
+                {isActive?<><Square fill="currentColor" size={20}/><span>Parar</span></>:<><Play fill="currentColor" size={20}/><span>Iniciar</span></>}
+            </button>
+            <button onClick={skipTimer} className="w-12 h-12 bg-white rounded-full flex items-center justify-center text-primary-600 hover:bg-gray-100 transition shadow-lg hover:scale-105 active:scale-95"><SkipForward fill="currentColor" size={24}/></button>
+        </div>
+     </div>
   );
 }
-
 export default Pomodoro;

@@ -16,3 +16,10 @@ export interface PomodoroTelemetry {
   timeLeft: number;
   timestamp: number;
 }
+
+// Agrega esto al final de src/shared/types.ts
+export interface PomodoroSettings {
+  workDuration: number;       // Minutos
+  shortBreakDuration: number; // Minutos
+  longBreakDuration: number;  // Minutos
+}

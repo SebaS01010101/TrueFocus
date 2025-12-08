@@ -1,9 +1,8 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('api', {
-  // Función para Login
   login: (credentials) => ipcRenderer.invoke('auth:login', credentials),
-
-  // Función para Telemetría
-  sendPomodoroUpdate: (data) => ipcRenderer.invoke('telemetry:send', data)
+  sendPomodoroUpdate: (data) => ipcRenderer.invoke('telemetry:send', data),
+  // Nueva función para pedir datos
+  getIoTData: () => ipcRenderer.invoke('iot:get-data')
 });
