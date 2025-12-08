@@ -88,3 +88,13 @@ body {
   background-attachment: fixed;
   margin: 0;
 }
+
+.glass-card {
+  /* Relleno #0F0F0F al 30% */
+  background-color: rgba(15, 15, 15, 0.30);
+  
+  /* Desenfoque de fondo de 30px */
+  backdrop-filter: blur(30px);
+  -webkit-backdrop-filter: blur(30px); /* Para soporte en Safari */
+
+}

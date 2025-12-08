@@ -27,28 +27,35 @@ export default function Login({ onLoginSuccess }: LoginProps) {
   };
 
   return (
-    <div className="flex flex-col items-center justify-center h-full space-y-4">
-      <h2 className="text-2xl font-bold text-blue-400">IoT Login</h2>
-      <form onSubmit={handleSubmit} className="flex flex-col gap-3 w-64 text-gray-800">
-        <input 
-          className="p-2 rounded" 
-          type="email" 
-          placeholder="Email" 
-          value={email}
-          onChange={e => setEmail(e.target.value)} 
-        />
-        <input 
-          className="p-2 rounded" 
-          type="password" 
-          placeholder="Password" 
-          value={password}
-          onChange={e => setPassword(e.target.value)} 
-        />
-        <button className="bg-blue-600 text-white p-2 rounded hover:bg-blue-500 transition">
-          Ingresar
-        </button>
-      </form>
-      <p className="text-red-400 text-sm">{status}</p>
+    <div className="flex items-center justify-center h-full w-full">
+      
+      {/* TARJETA DE CRISTAL: Aquí aplicamos el diseño */}
+      <div className="glass-card rounded-3xl p-8 flex flex-col items-center gap-6 w-80 shadow-2xl">
+        
+        <h2 className="text-3xl font-bold text-white tracking-wide">TrueFocus</h2>
+        
+        <form onSubmit={handleSubmit} className="flex flex-col gap-4 w-full">
+          <input 
+            className="p-3 rounded-xl bg-white/10 border border-white/20 text-white placeholder-gray-300 focus:outline-none focus:ring-2 focus:ring-brand-green-400 transition" 
+            type="email" 
+            placeholder="Email" 
+            value={email}
+            onChange={e => setEmail(e.target.value)} 
+          />
+          <input 
+            className="p-3 rounded-xl bg-white/10 border border-white/20 text-white placeholder-gray-300 focus:outline-none focus:ring-2 focus:ring-brand-green-400 transition" 
+            type="password" 
+            placeholder="Password" 
+            value={password}
+            onChange={e => setPassword(e.target.value)} 
+          />
+          <button className="mt-2 bg-brand-green-500 text-white font-bold py-3 rounded-xl hover:bg-brand-green-400 transition shadow-lg">
+            Ingresar
+          </button>
+        </form>
+        
+        {status && <p className="text-red-300 text-sm text-center animate-pulse">{status}</p>}
+      </div>
     </div>
   );
 }
