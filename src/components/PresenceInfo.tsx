@@ -40,22 +40,22 @@ function PresenceInfo({ pomodoroCount, settings }: PresenceInfoProps) {
   }, []);
 
   return (
-    <div className="glass-card rounded-3xl p-6 w-full max-w-sm mx-auto text-white shadow-xl border border-white/10 transition-all duration-500">
-      <div className="flex items-center justify-between mb-6">
-        <h2 className={`text-h4 font-bold tracking-wide transition-colors ${isPresent ? 'text-brand-green-500' : 'text-red-400'}`}>
+    <div className="glass-card rounded-3xl p-5 w-full h-full text-white shadow-xl border border-white/10 transition-all duration-500 flex flex-col">
+      <div className="flex items-center justify-between mb-4 shrink-0">
+        <h2 className={`text-lg font-bold tracking-wide transition-colors ${isPresent ? 'text-brand-green-500' : 'text-red-400'}`}>
           {isPresent ? 'Presencia detectada' : 'Ausencia detectada'}
         </h2>
         {isPresent ? (
-          <MonitorCheck size={28} className="text-brand-green-500 animate-pulse" />
+          <MonitorCheck size={22} className="text-brand-green-500 animate-pulse" />
         ) : (
-          <MonitorX size={28} className="text-red-400" />
+          <MonitorX size={22} className="text-red-400" />
         )}
       </div>
 
-      <div className="flex flex-col gap-4 text-body font-medium">
+      <div className="flex flex-col gap-2.5 text-sm font-medium flex-1 justify-center">
         <div className="flex items-center gap-2">
           <span className="opacity-90">Ciclos pomodoro:</span>
-          <span className="font-bold text-xl">{pomodoroCount}</span>
+          <span className="font-bold text-base">{pomodoroCount}</span>
         </div>
         <div className="flex items-center gap-2">
           <span className="opacity-90">Última detección:</span>
@@ -63,14 +63,13 @@ function PresenceInfo({ pomodoroCount, settings }: PresenceInfoProps) {
         </div>
         <div className="flex items-center gap-2">
           <span className="opacity-90">Siguiente descanso:</span>
-          {/* Aquí usamos el valor dinámico calculado */}
           <span className={`font-bold ${isLongBreak ? 'text-brand-green-400' : 'text-white'}`}>
             de {nextBreakDuration} minutos
           </span>
         </div>
         <div className="flex items-center gap-2">
           <span className="opacity-90">Distancia:</span>
-          <span className="font-bold font-mono text-lg">{distance}</span>
+          <span className="font-bold font-mono">{distance}</span>
         </div>
       </div>
     </div>

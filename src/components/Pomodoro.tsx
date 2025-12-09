@@ -120,34 +120,36 @@ function Pomodoro({ onCycleComplete, settings, currentCycle }: PomodoroProps) {
   const progressPercent = ((targetTime - timeLeft) / targetTime) * 100;
 
   return (
-     <div className="glass-card rounded-3xl flex flex-col items-center w-full p-5 mt-4 transition-all duration-300">
+     <div className="glass-card rounded-3xl flex flex-col items-center justify-between w-full h-full p-5 transition-all duration-300">
         
         {/* TABS */}
-        <div className="bg-primary-50/20 backdrop-blur-sm p-1 rounded-full flex items-center justify-between w-full mb-12 border border-white/10">
-            <button onClick={()=>{setMode('WORK');setTimeLeft(settings.workDuration*60);setIsActive(false)}} className={`flex items-center gap-2 px-6 py-2 rounded-full transition-all duration-300 ${mode==='WORK'?'bg-white text-brand-green-500 shadow-md font-bold':'text-primary-100 hover:text-white'}`}>
-                <Clock size={18}/><span>Trabajo</span>
+        <div className="bg-primary-50/20 backdrop-blur-sm p-1 rounded-full flex items-center justify-between w-full max-w-[280px] border border-white/10 shrink-0">
+            <button onClick={()=>{setMode('WORK');setTimeLeft(settings.workDuration*60);setIsActive(false)}} className={`flex items-center gap-1.5 px-4 py-1.5 rounded-full transition-all duration-300 text-sm ${mode==='WORK'?'bg-white text-brand-green-500 shadow-md font-bold':'text-primary-100 hover:text-white'}`}>
+                <Clock size={16}/><span>Trabajo</span>
             </button>
-            <button onClick={()=>{setMode('BREAK');setTimeLeft(settings.shortBreakDuration*60);setIsActive(false)}} className={`flex items-center gap-2 px-6 py-2 rounded-full transition-all duration-300 ${mode==='BREAK'?'bg-white text-brand-green-500 shadow-md font-bold':'text-primary-100 hover:text-white'}`}>
+            <button onClick={()=>{setMode('BREAK');setTimeLeft(settings.shortBreakDuration*60);setIsActive(false)}} className={`flex items-center gap-1.5 px-4 py-1.5 rounded-full transition-all duration-300 text-sm ${mode==='BREAK'?'bg-white text-brand-green-500 shadow-md font-bold':'text-primary-100 hover:text-white'}`}>
                 <span>Descanso</span>
-                {isLongBreak ? <Armchair size={18}/> : <Coffee size={18}/>}
+                {isLongBreak ? <Armchair size={16}/> : <Coffee size={16}/>}
             </button>
         </div>
 
         {/* TIMER */}
-        <div className="mb-8 relative"><h1 className="text-display font-bold text-white tracking-wider drop-shadow-lg">{formatTime(timeLeft)}</h1></div>
+        <div className="flex-1 flex items-center justify-center">
+          <h1 className="text-6xl font-bold text-white tracking-wider drop-shadow-lg">{formatTime(timeLeft)}</h1>
+        </div>
         
         {/* BARRA */}
-        <div className="w-full h-2 bg-white/10 rounded-full mb-12 overflow-hidden border border-white/5">
+        <div className="w-full h-1.5 bg-white/10 rounded-full mb-6 overflow-hidden border border-white/5 shrink-0">
             <div className="h-full bg-brand-green-400 transition-all duration-1000 ease-linear shadow-[0_0_10px_rgba(52,211,153,0.5)]" style={{width:`${progressPercent}%`}}/>
         </div>
         
         {/* CONTROLES */}
-        <div className="flex items-center gap-6">
-            <button onClick={resetTimer} className="w-12 h-12 bg-white rounded-full flex items-center justify-center text-primary-600 hover:bg-gray-100 transition shadow-lg hover:scale-105 active:scale-95"><RotateCcw size={24}/></button>
-            <button onClick={toggleTimer} className={`h-16 px-8 rounded-full flex items-center gap-3 shadow-xl hover:scale-105 active:scale-95 transition-all ${isActive?'bg-brand-green-500 hover:bg-brand-green-400':'bg-brand-green-500 hover:bg-brand-green-400'} text-white font-bold text-lg`}>
-                {isActive?<><Square fill="currentColor" size={20}/><span>Parar</span></>:<><Play fill="currentColor" size={20}/><span>Iniciar</span></>}
+        <div className="flex items-center gap-5 shrink-0">
+            <button onClick={resetTimer} className="w-10 h-10 bg-white rounded-full flex items-center justify-center text-primary-600 hover:bg-gray-100 transition shadow-lg hover:scale-105 active:scale-95"><RotateCcw size={20}/></button>
+            <button onClick={toggleTimer} className={`h-12 px-6 rounded-full flex items-center gap-2 shadow-xl hover:scale-105 active:scale-95 transition-all ${isActive?'bg-brand-green-500 hover:bg-brand-green-400':'bg-brand-green-500 hover:bg-brand-green-400'} text-white font-bold text-base`}>
+                {isActive?<><Square fill="currentColor" size={16}/><span>Parar</span></>:<><Play fill="currentColor" size={16}/><span>Iniciar</span></>}
             </button>
-            <button onClick={skipTimer} className="w-12 h-12 bg-white rounded-full flex items-center justify-center text-primary-600 hover:bg-gray-100 transition shadow-lg hover:scale-105 active:scale-95"><SkipForward fill="currentColor" size={24}/></button>
+            <button onClick={skipTimer} className="w-10 h-10 bg-white rounded-full flex items-center justify-center text-primary-600 hover:bg-gray-100 transition shadow-lg hover:scale-105 active:scale-95"><SkipForward fill="currentColor" size={20}/></button>
         </div>
      </div>
   );
