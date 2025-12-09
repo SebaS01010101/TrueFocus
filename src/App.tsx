@@ -1,17 +1,30 @@
-import { useState } from 'react';
-import { Settings } from 'lucide-react'; // Icono de engranaje
+import { useState, useEffect } from 'react';
+import { Settings } from 'lucide-react';
 import Login from './components/Login';
 import Pomodoro from './components/Pomodoro';
 import PresenceInfo from './components/PresenceInfo';
 import SettingsModal from './components/SettingsModal';
-import type { PomodoroSettings } from './shared/types';
+import AppUsage from './components/AppUsage';
+import ActivityChart from './components/ActivityChart';
+import type { PomodoroSettings, AppUsageItem } from './shared/types';
 
 function App() {
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [cycleCount, setCycleCount] = useState(0);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
 
-  // --- ESTADO CENTRAL DE LA CONFIGURACIÓN ---
+  // --- CORRECCIÓN: Estado centralizado de apps ---
+  const [appsData, setAppsData] = useState<AppUsageItem[]>([]);
+
+  useEffect(() => {
+    if (window.api?.onAppUsageUpdate) {
+      const unsubscribe = window.api.onAppUsageUpdate((data) => {
+        setAppsData(data);
+      });
+      return () => unsubscribe();
+    }
+  }, []);
+
   const [settings, setSettings] = useState<PomodoroSettings>({
     workDuration: 25,
     shortBreakDuration: 5,
@@ -25,7 +38,6 @@ function App() {
   return (
     <div className="h-screen w-screen text-white overflow-hidden flex flex-col items-center justify-center bg-transparent">
       
-      {/* Botón de Configuración (Solo visible si logueado) */}
       {isLoggedIn && (
         <button 
           onClick={() => setIsSettingsOpen(true)}
@@ -35,7 +47,6 @@ function App() {
         </button>
       )}
 
-      {/* Modal */}
       <SettingsModal 
         isOpen={isSettingsOpen} 
         onClose={() => setIsSettingsOpen(false)}
@@ -48,18 +59,21 @@ function App() {
       ) : (
         <div className="flex flex-col items-center gap-6 w-full max-w-md px-4 overflow-y-auto max-h-screen py-8 scrollbar-hide">
           
-          {/* Pasamos la configuración al Pomodoro */}
           <Pomodoro 
             onCycleComplete={handleCycleComplete} 
             settings={settings}
             currentCycle={cycleCount}
           />
           
-          {/* Pasamos la configuración a PresenceInfo */}
           <PresenceInfo 
             pomodoroCount={cycleCount} 
             settings={settings}
           />
+
+          {/* Pasamos los datos centralizados */}
+          <AppUsage apps={appsData} />
+
+          <ActivityChart apps={appsData} />
         </div>
       )}
     </div>

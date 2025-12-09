@@ -1,55 +1,78 @@
 const { app, BrowserWindow, ipcMain } = require('electron');
 const path = require('node:path');
+const fs = require('fs');
 const axios = require('axios');
 
+// --- CONFIGURACIÓN ---
+const STATS_FILE = path.join(app.getPath('userData'), 'truefocus-stats.json');
 const TB_HOST = 'http://iot.ceisufro.cl:8080';
 
-// Variables globales para mantener la sesión
+// --- ESTADO GLOBAL ---
+let activeWindowFn = null;
+let mainWindow = null;
 let currentDeviceToken = null;
 let currentUserJwt = null;
 let currentDeviceId = null;
 
+const appUsageStats = {}; 
+const iconCache = new Map(); 
+
+// --- PERSISTENCIA ---
+function loadStats() {
+  try {
+    if (fs.existsSync(STATS_FILE)) {
+      const data = fs.readFileSync(STATS_FILE, 'utf-8');
+      Object.assign(appUsageStats, JSON.parse(data));
+      console.log(`📂 Datos cargados: ${Object.keys(appUsageStats).length} apps.`);
+    }
+  } catch (e) { /* Ignorar errores de lectura inicial */ }
+}
+
+function saveStats() {
+  try {
+    // Convertimos a JSON con formato legible
+    fs.writeFileSync(STATS_FILE, JSON.stringify(appUsageStats, null, 2));
+  } catch (e) { /* Ignorar errores de escritura */ }
+}
+
+// --- IOT ---
 async function getDeviceToken(userJwt) {
   const authConfig = { headers: { 'X-Authorization': `Bearer ${userJwt}` } };
   try {
+    // 1. Obtener ID del cliente
     const userResp = await axios.get(`${TB_HOST}/api/auth/user`, authConfig);
     const customerId = userResp.data.customerId.id;
     
-    console.log("Usuario identificado. Customer ID:", customerId);
-    
+    // 2. Buscar dispositivos del cliente
     const devicesResp = await axios.get(
       `${TB_HOST}/api/customer/${customerId}/devices?pageSize=10&page=0`, 
       authConfig
     );
     
-    const devices = devicesResp.data.data;
-
-    if (!devices || devices.length === 0) {
-      throw new Error("Este usuario no tiene ningún dispositivo asignado en ThingsBoard.");
-    }
-
-    const myDevice = devices[0];
-    currentDeviceId = myDevice.id.id; // GUARDAMOS EL ID DEL DISPOSITIVO
-    console.log(`Dispositivo encontrado: ${myDevice.name} (ID: ${currentDeviceId})`);
+    if (!devicesResp.data.data.length) throw new Error("Sin dispositivos asignados.");
     
+    const myDevice = devicesResp.data.data[0];
+    currentDeviceId = myDevice.id.id;
+    
+    // 3. Obtener credenciales
     const credsResp = await axios.get(
       `${TB_HOST}/api/device/${currentDeviceId}/credentials`, 
       authConfig
     );
     
     return credsResp.data.credentialsId;
-
   } catch (error) {
-    console.error("Error al obtener dispositivo:", error.response?.data || error.message);
+    console.error("Error IoT:", error.message);
     throw error;
   }
 }
 
+// --- VENTANA PRINCIPAL ---
 const isDev = !app.isPackaged;
 
 function createWindow() {
-  const win = new BrowserWindow({
-    width: 1000,
+  mainWindow = new BrowserWindow({
+    width: 322,
     height: 700,
     webPreferences: {
       nodeIntegration: false,
@@ -59,15 +82,108 @@ function createWindow() {
   });
 
   if (isDev) {
-    win.loadURL('http://localhost:5173');
+    mainWindow.loadURL('http://localhost:5173');
   } else {
-    win.loadFile(path.join(__dirname, '../dist/index.html'));
+    mainWindow.loadFile(path.join(__dirname, '../dist/index.html'));
   }
 }
 
-app.whenReady().then(createWindow);
+// --- TRACKING DE VENTANAS (NUEVA LIBRERÍA get-windows) ---
+async function startAppTracking() {
+  loadStats();
+
+  if (!activeWindowFn) {
+    try {
+      // CAMBIO CLAVE: Usamos 'get-windows' en lugar de 'active-win'
+      const mod = await import('get-windows');
+      // Probamos exportaciones típicas de ESM
+      activeWindowFn = mod.default || mod.activeWindow || mod;
+      
+      console.log("✅ Librería de tracking (get-windows) cargada correctamente.");
+    } catch (e) {
+      console.error("❌ Error cargando get-windows. Asegúrate de instalarlo con: pnpm add get-windows");
+      console.error(e);
+      return;
+    }
+  }
+
+  // Bucle de monitoreo cada 1 segundo
+  setInterval(async () => {
+    try {
+      if (!mainWindow || mainWindow.isDestroyed() || !activeWindowFn) return;
+
+      const windowInfo = await activeWindowFn();
+
+      if (!windowInfo) return; // Si no hay ventana activa detectable
+
+      const appPath = windowInfo.owner.path;
+      const appName = windowInfo.owner.name;
+      const windowTitle = windowInfo.title;
+
+      // 1. Obtener Icono (Solo si no lo tenemos ya en RAM o Disco)
+      let iconDataUrl = iconCache.get(appPath);
+      
+      if (!iconDataUrl && appUsageStats[appName]?.icon) {
+        iconDataUrl = appUsageStats[appName].icon; // Recuperar de persistencia
+        iconCache.set(appPath, iconDataUrl);
+      }
+
+      if (!iconDataUrl) {
+        try {
+          // Electron nativo para extraer icono
+          const nativeIcon = await app.getFileIcon(appPath);
+          if (!nativeIcon.isEmpty()) {
+            iconDataUrl = nativeIcon.toDataURL();
+            iconCache.set(appPath, iconDataUrl);
+          }
+        } catch (e) { /* Icono no disponible, usar genérico */ }
+      }
+
+      // 2. Actualizar Estadísticas
+      if (!appUsageStats[appName]) {
+        appUsageStats[appName] = {
+          name: appName,
+          title: windowTitle,
+          icon: iconDataUrl || null,
+          seconds: 0,
+          lastActive: Date.now()
+        };
+      }
+      
+      appUsageStats[appName].seconds += 1;
+      appUsageStats[appName].lastActive = Date.now();
+      appUsageStats[appName].title = windowTitle;
+      
+      // Guardar icono nuevo en persistencia si apareció
+      if (iconDataUrl && !appUsageStats[appName].icon) {
+        appUsageStats[appName].icon = iconDataUrl;
+      }
+
+      // 3. Enviar al Frontend
+      const sortedStats = Object.values(appUsageStats).sort((a, b) => b.seconds - a.seconds);
+      
+      // Descomenta para ver logs en vivo
+      // console.log(`Enviando ${sortedStats.length} apps. Activa: ${appName}`);
+      
+      mainWindow.webContents.send('app-usage:update', sortedStats);
+
+    } catch (error) {
+      console.error("Tracking Loop Error:", error.message);
+    }
+  }, 1000);
+
+  // Guardado automático en disco cada 10s
+  setInterval(saveStats, 10000);
+}
+
+// --- ARRANQUE DE LA APP ---
+app.whenReady().then(() => {
+  createWindow();
+  startAppTracking();
+});
 
 app.on('window-all-closed', () => {
+  saveStats(); // Guardar al cerrar
   if (process.platform !== 'darwin') app.quit();
 });
 
@@ -76,60 +192,34 @@ app.on('activate', () => {
 });
 
 // --- IPC HANDLERS ---
-
-// 1. LOGIN
 ipcMain.handle('auth:login', async (event, { email, password }) => {
   try {
-    console.log(`Intentando login para: ${email} en ${TB_HOST}`);
-    
-    const loginResp = await axios.post(`${TB_HOST}/api/auth/login`, { 
-      username: email, 
-      password: password 
-    });
-    
-    currentUserJwt = loginResp.data.token; // GUARDAMOS EL TOKEN DE USUARIO
+    const loginResp = await axios.post(`${TB_HOST}/api/auth/login`, { username: email, password });
+    currentUserJwt = loginResp.data.token;
     currentDeviceToken = await getDeviceToken(currentUserJwt);
-    
-    console.log("¡Conexión IoT Exitosa!");
     return { success: true };
-
   } catch (error) {
-    const msg = error.response?.data?.message || error.message;
-    console.error("Fallo en login/dispositivo:", msg);
-    return { success: false, error: msg };
+    return { success: false, error: error.message };
   }
 });
 
-// 2. ENVIAR TELEMETRÍA
 ipcMain.handle('telemetry:send', async (event, data) => {
   if (!currentDeviceToken) return; 
   try {
     await axios.post(`${TB_HOST}/api/v1/${currentDeviceToken}/telemetry`, data);
-  } catch (error) {
-    console.error("Error enviando telemetría:", error.message);
-  }
+  } catch (error) {}
 });
 
-// 3. OBTENER DATOS IOT (NUEVO)
 ipcMain.handle('iot:get-data', async () => {
   if (!currentUserJwt || !currentDeviceId) return null;
-
   try {
-    const config = { headers: { 'X-Authorization': `Bearer ${currentUserJwt}` } };
-    // Pedimos las últimas series de tiempo para las claves 'distance' y 'presence'
     const url = `${TB_HOST}/api/plugins/telemetry/DEVICE/${currentDeviceId}/values/timeseries/latest?keys=distance,presence`;
-    
-    const resp = await axios.get(url, config);
-    
-    // ThingsBoard devuelve un objeto tipo: { distance: [{ts:..., value:...}], presence: [...] }
-    const data = resp.data;
-    
+    const resp = await axios.get(url, { headers: { 'X-Authorization': `Bearer ${currentUserJwt}` } });
     return {
-      distance: data.distance ? data.distance[0] : null,
-      presence: data.presence ? data.presence[0] : null
+      distance: resp.data.distance ? resp.data.distance[0] : null,
+      presence: resp.data.presence ? resp.data.presence[0] : null
     };
   } catch (error) {
-    console.error("Error leyendo IoT:", error.message);
     return null;
   }
 });

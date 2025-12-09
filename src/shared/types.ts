@@ -23,3 +23,11 @@ export interface PomodoroSettings {
   shortBreakDuration: number; // Minutos
   longBreakDuration: number;  // Minutos
 }
+
+export interface AppUsageItem {
+  name: string;
+  title: string;
+  icon: string | null; // Base64 image
+  seconds: number;
+  lastActive: number;
+}

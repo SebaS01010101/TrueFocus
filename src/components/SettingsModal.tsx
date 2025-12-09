@@ -14,7 +14,7 @@ export default function SettingsModal({ isOpen, onClose, currentSettings, onSave
 
   if (!isOpen) return null;
 
-  const handleChange = (e: React.ChangeEventHS<HTMLInputElement>) => {
+  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const { name, value } = e.target;
     setFormData(prev => ({
       ...prev,

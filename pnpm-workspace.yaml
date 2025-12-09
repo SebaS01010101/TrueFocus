@@ -5,3 +5,4 @@ ignoredBuiltDependencies:
 
 onlyBuiltDependencies:
   - electron-winstaller
+  - get-windows
