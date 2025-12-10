@@ -12,11 +12,8 @@ function App() {
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [cycleCount, setCycleCount] = useState(0);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-  
-  // Estado centralizado para las apps (para que no haya error de "not defined")
   const [appsData, setAppsData] = useState<AppUsageItem[]>([]);
 
-  // Escuchar datos del Backend (Electron)
   useEffect(() => {
     if (window.api?.onAppUsageUpdate) {
       const unsubscribe = window.api.onAppUsageUpdate((data) => {
@@ -58,7 +55,6 @@ function App() {
       {!isLoggedIn ? (
         <Login onLoginSuccess={() => setIsLoggedIn(true)} />
       ) : (
-        // --- LAYOUT PRINCIPAL (Diseño de 2 Columnas) ---
         <div className="flex items-center justify-center w-full h-full p-6">
           <div className="grid grid-cols-[1fr_340px] grid-rows-[320px_220px] gap-4 w-full max-w-[920px]">
             

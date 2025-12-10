@@ -1,6 +1,5 @@
 import { useState } from 'react';
-import type { LoginCredentials } from '../shared/types'; // Ya tienes este archivo, ¡úsalo!
- // Ya tienes este archivo, ¡úsalo!
+import type { LoginCredentials } from '../shared/types';
 
 interface LoginProps {
   onLoginSuccess: () => void;
@@ -16,7 +15,6 @@ export default function Login({ onLoginSuccess }: LoginProps) {
     setStatus('Conectando con ThingsBoard...');
 
     const creds: LoginCredentials = { email, password };
-    // Usamos window.api gracias al preload
     const result = await window.api.login(creds);
 
     if (result.success) {

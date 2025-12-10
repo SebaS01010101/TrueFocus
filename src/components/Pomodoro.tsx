@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { Play, Pause, RotateCcw, SkipForward, Coffee, Clock, Square, Armchair } from 'lucide-react';
+import { Play, RotateCcw, SkipForward, Coffee, Clock, Square, Armchair } from 'lucide-react';
 import type { PomodoroTelemetry, PomodoroSettings } from '../shared/types';
 
 interface PomodoroProps {
@@ -11,41 +11,67 @@ interface PomodoroProps {
 type TimerMode = 'WORK' | 'BREAK';
 
 function Pomodoro({ onCycleComplete, settings, currentCycle }: PomodoroProps) {
-  // Inicialización (esto está bien)
   const [timeLeft, setTimeLeft] = useState(settings.workDuration * 60);
   const [isActive, setIsActive] = useState(false);
   const [mode, setMode] = useState<TimerMode>('WORK');
   
-  // Lógica de descanso largo
   const isLongBreak = mode === 'WORK' 
     ? (currentCycle + 1) % 4 === 0 
     : currentCycle > 0 && currentCycle % 4 === 0;
   
-  // Calcular el tiempo que DEBERÍA tener el temporizador según la configuración actual
   const targetTime = mode === 'WORK' 
     ? settings.workDuration * 60 
     : (isLongBreak ? settings.longBreakDuration * 60 : settings.shortBreakDuration * 60);
 
-  // --- EFECTO CORREGIDO: Sincronización segura ---
+  // Sincronizar tiempo cuando cambia la configuración (solo si no está activo)
   useEffect(() => {
-    // Solo actualizamos si NO está activo y si el tiempo es diferente (para evitar loops)
     if (!isActive && timeLeft !== targetTime) {
-        // CORRECCIÓN: Usamos setTimeout para evitar "SetState synchronously in effect"
-        const timerId = setTimeout(() => {
-            setTimeLeft(targetTime);
-        }, 0);
-        return () => clearTimeout(timerId);
+      const timerId = setTimeout(() => setTimeLeft(targetTime), 0);
+      return () => clearTimeout(timerId);
     }
   }, [targetTime, isActive, timeLeft]); 
 
-  // ... (Resto del código de notificaciones y lógica igual que antes) ...
-  useEffect(() => { if (Notification.permission !== 'granted') Notification.requestPermission(); }, []);
-  const playNotificationSound = () => { try { const AudioContext = window.AudioContext || (window as any).webkitAudioContext; if (AudioContext) { const ctx = new AudioContext(); const o = ctx.createOscillator(); const g = ctx.createGain(); o.connect(g); g.connect(ctx.destination); o.type='sine'; o.frequency.setValueAtTime(500, ctx.currentTime); g.gain.setValueAtTime(0.1, ctx.currentTime); g.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime+0.5); o.start(); o.stop(ctx.currentTime+0.5); } } catch(e){} };
-  
-  const notifyUser = (message: string) => {
-    playNotificationSound();
-    if (Notification.permission === 'granted') new Notification('TrueFocus', { body: message, silent: true });
+  // Solicitar permisos de notificación al montar
+  useEffect(() => {
+    if (Notification.permission !== 'granted') {
+      Notification.requestPermission();
+    }
+  }, []);
+
+  // Reproducir sonido de notificación usando Web Audio API
+  const playNotificationSound = () => {
+    try {
+      const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+      if (!AudioContextClass) return;
+
+      const audioCtx = new AudioContextClass();
+      const oscillator = audioCtx.createOscillator();
+      const gainNode = audioCtx.createGain();
+
+      oscillator.connect(gainNode);
+      gainNode.connect(audioCtx.destination);
+
+      oscillator.type = 'sine';
+      oscillator.frequency.setValueAtTime(500, audioCtx.currentTime);
+      
+      gainNode.gain.setValueAtTime(0.1, audioCtx.currentTime);
+      gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.5);
+
+      oscillator.start();
+      oscillator.stop(audioCtx.currentTime + 0.5);
+    } catch (error) {
+      // Log audio errors for debugging purposes
+      console.error('Audio notification error:', error);
+    }
   };
+  
+  // Notificar al usuario con sonido y notificación del sistema
+  const notifyUser = useCallback((message: string) => {
+    playNotificationSound();
+    if (Notification.permission === 'granted') {
+      new Notification('TrueFocus', { body: message, silent: true });
+    }
+  }, []);
 
   const sendPomodoroUpdate = useCallback((newStatus: PomodoroTelemetry['status'], time: number) => {
     if (globalThis.api) globalThis.api.sendPomodoroUpdate({ status: newStatus, timeLeft: time, timestamp: Date.now() });
@@ -72,10 +98,13 @@ function Pomodoro({ onCycleComplete, settings, currentCycle }: PomodoroProps) {
     }
 
     setMode(nextMode);
-  }, [mode, sendPomodoroUpdate, onCycleComplete, settings, currentCycle]);
+  }, [mode, sendPomodoroUpdate, onCycleComplete, settings, currentCycle, notifyUser]);
 
   const handleTimerCompleteRef = useRef(handleTimerComplete);
-  useEffect(() => { handleTimerCompleteRef.current = handleTimerComplete; }, [handleTimerComplete]);
+  
+  useEffect(() => {
+    handleTimerCompleteRef.current = handleTimerComplete;
+  }, [handleTimerComplete]);
 
   // Intervalo del reloj
   useEffect(() => {
@@ -92,31 +121,38 @@ function Pomodoro({ onCycleComplete, settings, currentCycle }: PomodoroProps) {
     return () => clearInterval(interval);
   }, [isActive]);
 
-  const toggleTimer = () => { setIsActive(!isActive); sendPomodoroUpdate(!isActive?'RUNNING':'PAUSED', timeLeft); };
-  
-  const resetTimer = () => { 
-    setIsActive(false); 
-    setTimeLeft(targetTime); // Usamos la variable calculada
-    sendPomodoroUpdate('IDLE', targetTime); 
+  const toggleTimer = () => {
+    const newActiveState = !isActive;
+    setIsActive(newActiveState);
+    sendPomodoroUpdate(newActiveState ? 'RUNNING' : 'PAUSED', timeLeft);
   };
   
-  const skipTimer = () => { 
-      const nextMode = mode === 'WORK' ? 'BREAK' : 'WORK';
-      setMode(nextMode);
-      
-      if (nextMode === 'WORK') {
-          setTimeLeft(settings.workDuration * 60);
-      } else {
-          // Lógica de skip manual
-          const isLong = (currentCycle + 1) % 4 === 0;
-          setTimeLeft(isLong ? settings.longBreakDuration * 60 : settings.shortBreakDuration * 60);
-      }
-      
-      setIsActive(false); 
-      sendPomodoroUpdate('IDLE', 0);
+  const resetTimer = () => {
+    setIsActive(false);
+    setTimeLeft(targetTime);
+    sendPomodoroUpdate('IDLE', targetTime);
+  };
+  
+  const skipTimer = () => {
+    const nextMode = mode === 'WORK' ? 'BREAK' : 'WORK';
+    setMode(nextMode);
+    
+    if (nextMode === 'WORK') {
+      setTimeLeft(settings.workDuration * 60);
+    } else {
+      const isLong = (currentCycle + 1) % 4 === 0;
+      setTimeLeft(isLong ? settings.longBreakDuration * 60 : settings.shortBreakDuration * 60);
+    }
+    
+    setIsActive(false);
+    sendPomodoroUpdate('IDLE', 0);
   };
 
-  const formatTime = (s:number) => `${Math.floor(s/60).toString().padStart(2,'0')}:${(s%60).toString().padStart(2,'0')}`;
+  const formatTime = (seconds: number) => {
+    const mins = Math.floor(seconds / 60).toString().padStart(2, '0');
+    const secs = (seconds % 60).toString().padStart(2, '0');
+    return `${mins}:${secs}`;
+  };
   const progressPercent = ((targetTime - timeLeft) / targetTime) * 100;
 
   return (
@@ -124,13 +160,38 @@ function Pomodoro({ onCycleComplete, settings, currentCycle }: PomodoroProps) {
         
         {/* TABS */}
         <div className="bg-primary-50/20 backdrop-blur-sm p-1 rounded-full flex items-center justify-between w-full max-w-[280px] border border-white/10 shrink-0">
-            <button onClick={()=>{setMode('WORK');setTimeLeft(settings.workDuration*60);setIsActive(false)}} className={`flex items-center gap-1.5 px-4 py-1.5 rounded-full transition-all duration-300 text-sm ${mode==='WORK'?'bg-white text-brand-green-500 shadow-md font-bold':'text-primary-100 hover:text-white'}`}>
-                <Clock size={16}/><span>Trabajo</span>
-            </button>
-            <button onClick={()=>{setMode('BREAK');setTimeLeft(settings.shortBreakDuration*60);setIsActive(false)}} className={`flex items-center gap-1.5 px-4 py-1.5 rounded-full transition-all duration-300 text-sm ${mode==='BREAK'?'bg-white text-brand-green-500 shadow-md font-bold':'text-primary-100 hover:text-white'}`}>
-                <span>Descanso</span>
-                {isLongBreak ? <Armchair size={16}/> : <Coffee size={16}/>}
-            </button>
+          <button
+            onClick={() => {
+              setMode('WORK');
+              setTimeLeft(settings.workDuration * 60);
+              setIsActive(false);
+            }}
+            className={`flex items-center gap-1.5 px-4 py-1.5 rounded-full transition-all duration-300 text-sm ${
+              mode === 'WORK'
+                ? 'bg-white text-brand-green-500 shadow-md font-bold'
+                : 'text-primary-100 hover:text-white'
+            }`}
+          >
+            <Clock size={16} />
+            <span>Trabajo</span>
+          </button>
+          
+          <button
+            onClick={() => {
+              setMode('BREAK');
+              const isLong = (currentCycle + 1) % 4 === 0;
+              setTimeLeft(isLong ? settings.longBreakDuration * 60 : settings.shortBreakDuration * 60);
+              setIsActive(false);
+            }}
+            className={`flex items-center gap-1.5 px-4 py-1.5 rounded-full transition-all duration-300 text-sm ${
+              mode === 'BREAK'
+                ? 'bg-white text-brand-green-500 shadow-md font-bold'
+                : 'text-primary-100 hover:text-white'
+            }`}
+          >
+            <span>Descanso</span>
+            {isLongBreak ? <Armchair size={16} /> : <Coffee size={16} />}
+          </button>
         </div>
 
         {/* TIMER */}
@@ -145,11 +206,30 @@ function Pomodoro({ onCycleComplete, settings, currentCycle }: PomodoroProps) {
         
         {/* CONTROLES */}
         <div className="flex items-center gap-5 shrink-0">
-            <button onClick={resetTimer} className="w-10 h-10 bg-white rounded-full flex items-center justify-center text-primary-600 hover:bg-gray-100 transition shadow-lg hover:scale-105 active:scale-95"><RotateCcw size={20}/></button>
-            <button onClick={toggleTimer} className={`h-12 px-6 rounded-full flex items-center gap-2 shadow-xl hover:scale-105 active:scale-95 transition-all ${isActive?'bg-brand-green-500 hover:bg-brand-green-400':'bg-brand-green-500 hover:bg-brand-green-400'} text-white font-bold text-base`}>
-                {isActive?<><Square fill="currentColor" size={16}/><span>Parar</span></>:<><Play fill="currentColor" size={16}/><span>Iniciar</span></>}
-            </button>
-            <button onClick={skipTimer} className="w-10 h-10 bg-white rounded-full flex items-center justify-center text-primary-600 hover:bg-gray-100 transition shadow-lg hover:scale-105 active:scale-95"><SkipForward fill="currentColor" size={20}/></button>
+          <button
+            onClick={resetTimer}
+            className="w-10 h-10 bg-white rounded-full flex items-center justify-center text-primary-600 hover:bg-gray-100 transition shadow-lg hover:scale-105 active:scale-95"
+          >
+            <RotateCcw size={20} />
+          </button>
+          
+          <button
+            onClick={toggleTimer}
+            className="h-12 px-6 rounded-full flex items-center gap-2 shadow-xl hover:scale-105 active:scale-95 transition-all bg-brand-green-500 hover:bg-brand-green-400 text-white font-bold text-base"
+          >
+            {isActive ? (
+              <><Square fill="currentColor" size={16} /><span>Parar</span></>
+            ) : (
+              <><Play fill="currentColor" size={16} /><span>Iniciar</span></>
+            )}
+          </button>
+          
+          <button
+            onClick={skipTimer}
+            className="w-10 h-10 bg-white rounded-full flex items-center justify-center text-primary-600 hover:bg-gray-100 transition shadow-lg hover:scale-105 active:scale-95"
+          >
+            <SkipForward fill="currentColor" size={20} />
+          </button>
         </div>
      </div>
   );

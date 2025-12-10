@@ -4,7 +4,7 @@ import type { AppUsageItem } from '../shared/types';
 import AppUsageModal from './AppUsageModal';
 
 interface AppUsageProps {
-  apps: AppUsageItem[]; // Recibe datos desde App
+  apps: AppUsageItem[];
 }
 
 export default function AppUsage({ apps }: AppUsageProps) {

@@ -7,8 +7,6 @@ interface ActivityChartProps {
 }
 
 export default function ActivityChart({ apps }: ActivityChartProps) {
-  
-  // 1. Cálculos optimizados
   const stats = useMemo(() => calculateCategoryStats(apps), [apps]);
 
   const totalSeconds = useMemo(() => {
@@ -29,7 +27,6 @@ export default function ActivityChart({ apps }: ActivityChartProps) {
     return m > 0 ? `${h}h ${m}m` : `${h}h`;
   };
 
-  // 2. Escala Inteligente (Mínimo 1 hora, crece si te pasas)
   const maxValue = useMemo(() => {
     const maxCategory = Math.max(stats.Productivity, stats.Social, stats.Entertainment + stats.Other);
     return Math.max(maxCategory, 3600);

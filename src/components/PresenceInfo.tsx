@@ -4,7 +4,7 @@ import type { PomodoroSettings } from '../shared/types';
 
 interface PresenceInfoProps {
   pomodoroCount: number;
-  settings: PomodoroSettings; // Recibimos settings
+  settings: PomodoroSettings;
 }
 
 function PresenceInfo({ pomodoroCount, settings }: PresenceInfoProps) {
@@ -12,7 +12,6 @@ function PresenceInfo({ pomodoroCount, settings }: PresenceInfoProps) {
   const [isPresent, setIsPresent] = useState<boolean>(false);
   const [lastSeen, setLastSeen] = useState<string>('Esperando datos...');
 
-  // --- LÓGICA DINÁMICA ---
   const isLongBreak = (pomodoroCount + 1) % 4 === 0;
   const nextBreakDuration = isLongBreak ? settings.longBreakDuration : settings.shortBreakDuration;
 

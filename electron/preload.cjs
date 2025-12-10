@@ -1,3 +1,9 @@
+/**
+ * Preload Script - Puente seguro entre Electron y React
+ * 
+ * Expone la API de ThingsBoard al renderer de forma segura
+ * usando contextBridge para mantener contextIsolation.
+ */
 const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('api', {
@@ -5,13 +11,9 @@ contextBridge.exposeInMainWorld('api', {
   sendPomodoroUpdate: (data) => ipcRenderer.invoke('telemetry:send', data),
   getIoTData: () => ipcRenderer.invoke('iot:get-data'),
   
-  // NUEVO: Escuchar actualizaciones de uso de apps
   onAppUsageUpdate: (callback) => {
-    // Filtramos para evitar múltiples listeners
     const subscription = (_event, data) => callback(data);
     ipcRenderer.on('app-usage:update', subscription);
-    
-    // Función de limpieza para React (useEffect return)
     return () => ipcRenderer.removeListener('app-usage:update', subscription);
   }
 });
