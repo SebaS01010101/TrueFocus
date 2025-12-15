@@ -1,0 +1,148 @@
+@import "tailwindcss";
+@theme {
+    /* --- TIPOGRAFÍA (Basado en imagen de estilos de texto) --- */
+    --font-display: "Outfit", sans-serif;
+
+    /* Tamaños de texto personalizados (Tamaño / Line-height) */
+    --text-display: 61px;
+    --text-display--line-height: 67px;
+
+    --text-h1: 49px;
+    --text-h1--line-height: 59px;
+
+    --text-h2: 39px;
+    --text-h2--line-height: 47px;
+
+    --text-h3: 31px;
+    --text-h3--line-height: 40px;
+
+    --text-h4: 25px;
+    --text-h4--line-height: 33px;
+
+    --text-h5: 20px;
+    --text-h5--line-height: 28px;
+
+    --text-body: 16px;
+    --text-body--line-height: 24px;
+
+    --text-caption: 13px;
+    --text-caption--line-height: 18px;
+
+    --text-tiny: 10px;
+    --text-tiny--line-height: 14px;
+
+    /* --- COLORES (Basado en imagen de paletas) --- */
+
+    /* Paleta Primary (Azules) */
+    --color-primary-50: #ebf3fe;
+    --color-primary-100: #c2d8fc;
+    --color-primary-200: #a5c6fb;
+    --color-primary-300: #7cabf9;
+    --color-primary-400: #629bf8;
+    --color-primary-500: #3b82f6; /* Color principal */
+    --color-primary-600: #3676e0;
+    --color-primary-700: #2a5caf;
+    --color-primary-800: #204887;
+    --color-primary-900: #193767;
+
+    /* Paleta Secondary (Morados) */
+    --color-secondary-50: #f3effe;
+    --color-secondary-100: #dbccfc;
+    --color-secondary-200: #cab4fb;
+    --color-secondary-300: #b192f9;
+    --color-secondary-400: #a27df8;
+    --color-secondary-500: #8b5cf6;
+    --color-secondary-600: #7e54e0;
+    --color-secondary-700: #6341af;
+    --color-secondary-800: #4c3387;
+    --color-secondary-900: #3a2767;
+
+    /* Paleta Green (Verdes/Teal) */
+    --color-brand-green-50: #e6faf5;
+    --color-brand-green-100: #b0eede;
+    --color-brand-green-200: #8ae6cf;
+    --color-brand-green-300: #54dab9;
+    --color-brand-green-400: #33d3ab;
+    --color-brand-green-500: #00c896;
+    --color-brand-green-600: #00b689;
+    --color-brand-green-700: #008e6b;
+    --color-brand-green-800: #006e53;
+    --color-brand-green-900: #00543f;
+
+    --color-gradient-end: #5781c7;
+}
+
+/* Aplicar la fuente Outfit por defecto a todo el body */
+body {
+    font-family: var(--font-display);
+    background-color: var(--color-primary-900); /* Fondo oscuro por defecto */
+    color: white;
+
+    background: linear-gradient(
+        180deg,
+        var(--color-primary-500) 0%,
+        var(--color-gradient-end) 100%
+    );
+
+    min-height: 100vh;
+    background-attachment: fixed;
+    margin: 0;
+}
+
+.glass-card {
+    /* Relleno #0F0F0F al 30% */
+    background-color: rgba(15, 15, 15, 0.3);
+
+    /* Desenfoque de fondo de 30px */
+    backdrop-filter: blur(30px);
+    -webkit-backdrop-filter: blur(30px); /* Para soporte en Safari */
+}
+
+/* Estilos personalizados para scrollbar con diseño glass moderno */
+* {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(255, 255, 255, 0.2) rgba(255, 255, 255, 0.05);
+}
+
+/* Para navegadores WebKit (Chrome, Safari, Edge) */
+*::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+}
+
+*::-webkit-scrollbar-track {
+    background: rgba(255, 255, 255, 0.05);
+    border-radius: 10px;
+    backdrop-filter: blur(10px);
+}
+
+*::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.2);
+    border-radius: 10px;
+    border: 2px solid transparent;
+    background-clip: padding-box;
+    transition: background 0.3s ease;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+    background: rgba(255, 255, 255, 0.3);
+    background-clip: padding-box;
+}
+
+*::-webkit-scrollbar-thumb:active {
+    background: rgba(0, 200, 150, 0.4);
+    background-clip: padding-box;
+}
+
+/* Scrollbar para elementos con fondo oscuro (como modales de debug) */
+.dark-scrollbar::-webkit-scrollbar-track {
+    background: rgba(0, 0, 0, 0.3);
+}
+
+.dark-scrollbar::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.15);
+}
+
+.dark-scrollbar::-webkit-scrollbar-thumb:hover {
+    background: rgba(255, 255, 255, 0.25);
+}

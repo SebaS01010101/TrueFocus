@@ -1,0 +1,8 @@
+ignoredBuiltDependencies:
+  - '@swc/core'
+  - electron
+  - esbuild
+
+onlyBuiltDependencies:
+  - electron-winstaller
+  - get-windows
