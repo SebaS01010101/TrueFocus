@@ -9,10 +9,12 @@
     "build": "tsc -b && vite build && electron-builder",
     "lint": "eslint .",
     "preview": "vite preview",
-    "start": "electron ."
+    "start": "electron .",
+    "test:iot": "node test-thingsboard.js"
   },
   "dependencies": {
     "axios": "^1.13.2",
+    "dotenv": "^17.2.3",
     "get-windows": "^9.2.3",
     "lucide-react": "^0.556.0",
     "react": "^19.2.0",
