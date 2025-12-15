@@ -16,6 +16,8 @@ contextBridge.exposeInMainWorld("api", {
 
   // Funciones de estadísticas por fecha
   getStatsByDate: (dateKey) => ipcRenderer.invoke("stats:get-by-date", dateKey),
+  getStatsByDateHourly: (dateKey) =>
+    ipcRenderer.invoke("stats:get-by-date-hourly", dateKey),
   getStatsDates: () => ipcRenderer.invoke("stats:get-dates"),
   getStatsDateRange: (range) =>
     ipcRenderer.invoke("stats:get-date-range", range),

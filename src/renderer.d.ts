@@ -52,6 +52,15 @@ export interface AppUsageByDate {
 }
 
 /**
+ * Estadísticas de uso de aplicaciones por fecha y hora
+ */
+export interface AppUsageByDateHourly {
+  [hour: string]: {
+    [appName: string]: AppUsageItem;
+  };
+}
+
+/**
  * Rango de fechas para consulta
  */
 export interface DateRange {
@@ -134,8 +143,11 @@ export interface ElectronAPI {
   /** Enviar comando RPC al dispositivo Arduino */
   sendRpcCommand: (command: RpcCommand) => Promise<RpcResult>;
 
-  /** Obtener estadísticas por fecha (YYYY-MM-DD) */
+  /** Obtener estadísticas por fecha (YYYY-MM-DD) - agregadas por app */
   getStatsByDate: (dateKey: string) => Promise<AppUsageByDate>;
+
+  /** Obtener estadísticas por fecha y hora (YYYY-MM-DD) */
+  getStatsByDateHourly: (dateKey: string) => Promise<AppUsageByDateHourly>;
 
   /** Obtener todas las fechas con estadísticas */
   getStatsDates: () => Promise<string[]>;

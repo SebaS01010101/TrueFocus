@@ -5,7 +5,7 @@ import Pomodoro from "./components/Pomodoro";
 import PresenceInfo from "./components/PresenceInfo";
 import SettingsModal from "./components/SettingsModal";
 import AppUsage from "./components/AppUsage";
-import ActivityChart from "./components/ActivityChart";
+import ScreenTimeWidget from "./components/ScreenTimeWidget";
 import type { PomodoroSettings, AppUsageItem } from "./shared/types";
 import type { IoTDataResponse } from "./renderer";
 
@@ -271,8 +271,8 @@ function App() {
       ) : (
         <div className="flex items-center justify-center w-full h-full p-6">
           <div className="grid grid-cols-[1fr_340px] grid-rows-[320px_220px] gap-4 w-full max-w-[920px]">
-            {/* Gráfico de Actividad (arriba izquierda) */}
-            <ActivityChart apps={appsData} />
+            {/* Screen Time (arriba izquierda) */}
+            <ScreenTimeWidget />
 
             {/* Pomodoro (arriba derecha) */}
             <Pomodoro

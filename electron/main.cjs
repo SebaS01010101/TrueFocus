@@ -64,7 +64,7 @@ let currentDeviceToken = DEVICE_CONFIG.accessToken; // Usar token directo del di
 let currentUserJwt = null;
 let currentDeviceId = DEVICE_CONFIG.id; // Usar ID directo del dispositivo
 
-// Nueva estructura: { "YYYY-MM-DD": { appName: { name, title, icon, seconds, lastActive } } }
+// Nueva estructura: { "YYYY-MM-DD": { "HH": { appName: { name, title, icon, seconds, lastActive } } } }
 const appUsageStatsByDay = {};
 const iconCache = new Map();
 let currentPresence = false; // Estado de presencia actual
@@ -82,12 +82,31 @@ function loadStats() {
         loaded &&
         !Object.keys(loaded).some((key) => /^\d{4}-\d{2}-\d{2}$/.test(key))
       ) {
-        // Formato antiguo, migrar al nuevo con fecha de hoy
-        appUsageStatsByDay[currentDateKey] = loaded;
-        console.log("📦 Migrado formato antiguo de estadísticas");
+        // Formato muy antiguo, migrar al nuevo con fecha y hora de hoy
+        const currentHour = new Date().getHours().toString();
+        appUsageStatsByDay[currentDateKey] = { [currentHour]: loaded };
+        console.log("📦 Migrado formato muy antiguo de estadísticas");
       } else {
-        // Formato nuevo
-        Object.assign(appUsageStatsByDay, loaded);
+        // Verificar si tiene formato por hora o solo por día
+        Object.keys(loaded).forEach((dateKey) => {
+          if (/^\d{4}-\d{2}-\d{2}$/.test(dateKey)) {
+            const dayData = loaded[dateKey];
+            // Verificar si tiene estructura por hora
+            const hasHourlyStructure = Object.keys(dayData).some((key) =>
+              /^\d{1,2}$/.test(key),
+            );
+
+            if (!hasHourlyStructure) {
+              // Migrar de formato por día a formato por hora
+              const currentHour = new Date().getHours().toString();
+              appUsageStatsByDay[dateKey] = { [currentHour]: dayData };
+              console.log(`📦 Migrado día ${dateKey} a formato por hora`);
+            } else {
+              // Ya tiene formato por hora
+              appUsageStatsByDay[dateKey] = dayData;
+            }
+          }
+        });
       }
     }
   } catch (err) {
@@ -103,8 +122,22 @@ function saveStats() {
   }
 }
 
-// Obtener estadísticas del día actual
-function getTodayStats() {
+// Obtener estadísticas del día y hora actual
+function getCurrentHourStats() {
+  const currentHour = new Date().getHours().toString();
+
+  if (!appUsageStatsByDay[currentDateKey]) {
+    appUsageStatsByDay[currentDateKey] = {};
+  }
+  if (!appUsageStatsByDay[currentDateKey][currentHour]) {
+    appUsageStatsByDay[currentDateKey][currentHour] = {};
+  }
+
+  return appUsageStatsByDay[currentDateKey][currentHour];
+}
+
+// Obtener todas las estadísticas del día (todas las horas)
+function getTodayAllHours() {
   if (!appUsageStatsByDay[currentDateKey]) {
     appUsageStatsByDay[currentDateKey] = {};
   }
@@ -236,11 +269,11 @@ async function startAppTracking() {
       const appName = windowInfo.owner.name;
       const windowTitle = windowInfo.title;
 
-      const todayStats = getTodayStats();
+      const currentHourStats = getCurrentHourStats();
 
       let iconDataUrl = iconCache.get(appPath);
-      if (!iconDataUrl && todayStats[appName]?.icon) {
-        iconDataUrl = todayStats[appName].icon;
+      if (!iconDataUrl && currentHourStats[appName]?.icon) {
+        iconDataUrl = currentHourStats[appName].icon;
         iconCache.set(appPath, iconDataUrl);
       }
 
@@ -254,8 +287,8 @@ async function startAppTracking() {
         } catch (e) {}
       }
 
-      if (!todayStats[appName]) {
-        todayStats[appName] = {
+      if (!currentHourStats[appName]) {
+        currentHourStats[appName] = {
           name: appName,
           title: windowTitle,
           icon: iconDataUrl || null,
@@ -264,15 +297,28 @@ async function startAppTracking() {
         };
       }
 
-      todayStats[appName].seconds += 1;
-      todayStats[appName].lastActive = Date.now();
-      todayStats[appName].title = windowTitle;
+      currentHourStats[appName].seconds += 1;
+      currentHourStats[appName].lastActive = Date.now();
+      currentHourStats[appName].title = windowTitle;
 
-      if (iconDataUrl && !todayStats[appName].icon) {
-        todayStats[appName].icon = iconDataUrl;
+      if (iconDataUrl && !currentHourStats[appName].icon) {
+        currentHourStats[appName].icon = iconDataUrl;
       }
 
-      const sortedStats = Object.values(todayStats).sort(
+      // Obtener stats agregadas del día completo para el display
+      const allHoursToday = getTodayAllHours();
+      const aggregatedStats = {};
+
+      for (const hour in allHoursToday) {
+        for (const app in allHoursToday[hour]) {
+          if (!aggregatedStats[app]) {
+            aggregatedStats[app] = { ...allHoursToday[hour][app], seconds: 0 };
+          }
+          aggregatedStats[app].seconds += allHoursToday[hour][app].seconds;
+        }
+      }
+
+      const sortedStats = Object.values(aggregatedStats).sort(
         (a, b) => b.seconds - a.seconds,
       );
       mainWindow.webContents.send("app-usage:update", sortedStats);
@@ -368,8 +414,26 @@ ipcMain.handle("tracking:get-status", () => {
   };
 });
 
-// IPC: Obtener estadísticas por fecha
+// IPC: Obtener estadísticas por fecha (agregadas por app, todas las horas)
 ipcMain.handle("stats:get-by-date", async (_event, dateKey) => {
+  const dayData = appUsageStatsByDay[dateKey] || {};
+  const aggregatedStats = {};
+
+  // Agregar todas las horas
+  for (const hour in dayData) {
+    for (const app in dayData[hour]) {
+      if (!aggregatedStats[app]) {
+        aggregatedStats[app] = { ...dayData[hour][app], seconds: 0 };
+      }
+      aggregatedStats[app].seconds += dayData[hour][app].seconds;
+    }
+  }
+
+  return aggregatedStats;
+});
+
+// IPC: Obtener estadísticas por fecha y hora
+ipcMain.handle("stats:get-by-date-hourly", async (_event, dateKey) => {
   return appUsageStatsByDay[dateKey] || {};
 });
 
@@ -388,7 +452,20 @@ ipcMain.handle(
       .sort();
 
     for (const date of dates) {
-      result[date] = appUsageStatsByDay[date];
+      const dayData = appUsageStatsByDay[date];
+      const aggregatedStats = {};
+
+      // Agregar todas las horas
+      for (const hour in dayData) {
+        for (const app in dayData[hour]) {
+          if (!aggregatedStats[app]) {
+            aggregatedStats[app] = { ...dayData[hour][app], seconds: 0 };
+          }
+          aggregatedStats[app].seconds += dayData[hour][app].seconds;
+        }
+      }
+
+      result[date] = aggregatedStats;
     }
 
     return result;
@@ -415,21 +492,24 @@ ipcMain.handle("stats:get-weekly-summary", async (_event, weekStartDate) => {
     summary.dates.push(dateKey);
     summary.dailyTotals[dateKey] = 0;
 
-    const dayStats = appUsageStatsByDay[dateKey];
-    if (dayStats) {
-      for (const appName in dayStats) {
-        const app = dayStats[appName];
-        summary.totalSeconds += app.seconds;
-        summary.dailyTotals[dateKey] += app.seconds;
+    const dayData = appUsageStatsByDay[dateKey];
+    if (dayData) {
+      // Iterar por todas las horas del día
+      for (const hour in dayData) {
+        for (const appName in dayData[hour]) {
+          const app = dayData[hour][appName];
+          summary.totalSeconds += app.seconds;
+          summary.dailyTotals[dateKey] += app.seconds;
 
-        if (!summary.topApps[appName]) {
-          summary.topApps[appName] = {
-            name: app.name,
-            icon: app.icon,
-            seconds: 0,
-          };
+          if (!summary.topApps[appName]) {
+            summary.topApps[appName] = {
+              name: app.name,
+              icon: app.icon,
+              seconds: 0,
+            };
+          }
+          summary.topApps[appName].seconds += app.seconds;
         }
-        summary.topApps[appName].seconds += app.seconds;
       }
     }
   }
