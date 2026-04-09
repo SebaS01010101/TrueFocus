@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { MonitorCheck, MonitorX, Bug } from "lucide-react";
 import type { PomodoroSettings } from "../shared/types";
+import { usePresenceStatus } from "../usePresenceStatus";
 
 interface PresenceInfoProps {
   pomodoroCount: number;
@@ -9,12 +10,12 @@ interface PresenceInfoProps {
 
 function PresenceInfo({ pomodoroCount, settings }: PresenceInfoProps) {
   const [distance, setDistance] = useState<string>("--");
-  const [isPresent, setIsPresent] = useState<boolean>(false);
   const [lastSeen, setLastSeen] = useState<string>("Esperando datos...");
   const [debugMode, setDebugMode] = useState<boolean>(false);
   const [rawData, setRawData] = useState<unknown>(null);
   const [lastUpdate, setLastUpdate] = useState<string>("--");
   const [updateCount, setUpdateCount] = useState<number>(0);
+  const { isPresent } = usePresenceStatus(true);
 
   const isLongBreak = (pomodoroCount + 1) % 4 === 0;
   const nextBreakDuration = isLongBreak
@@ -22,32 +23,59 @@ function PresenceInfo({ pomodoroCount, settings }: PresenceInfoProps) {
     : settings.shortBreakDuration;
 
   useEffect(() => {
+    let isMounted = true;
+
     const fetchData = async () => {
       if (!window.api?.getIoTData) return;
-      const data = await window.api.getIoTData();
-      if (data) {
+
+      try {
+        const data = await window.api.getIoTData();
+        if (!isMounted || !data) return;
+
         setRawData(data);
         setLastUpdate(new Date().toLocaleTimeString());
         setUpdateCount((prev) => prev + 1);
 
-        if (data.distance)
-          setDistance(`${parseFloat(data.distance.value).toFixed(0)} cm`);
+        if (data.distance) {
+          const parsedDistance = Number.parseFloat(data.distance.value);
+          setDistance(
+            Number.isFinite(parsedDistance)
+              ? `${parsedDistance.toFixed(0)} cm`
+              : "--",
+          );
+        }
+
         if (data.presence) {
           const present =
             data.presence.value === "true" || data.presence.value === "1";
-          setIsPresent(present);
-          if (present) setLastSeen("Ahora mismo");
-          else {
+
+          if (present) {
+            setLastSeen("Ahora mismo");
+          } else {
             const diff = Date.now() - data.presence.ts;
             const minutes = Math.floor(diff / 60000);
             setLastSeen(`hace ${minutes} minutos`);
           }
         }
+      } catch (error) {
+        if (!isMounted) return;
+
+        setRawData({
+          error: error instanceof Error ? error.message : String(error),
+        });
       }
     };
-    fetchData();
-    const interval = setInterval(fetchData, 2000);
-    return () => clearInterval(interval);
+
+    void fetchData();
+
+    const interval = setInterval(() => {
+      void fetchData();
+    }, 2000);
+
+    return () => {
+      isMounted = false;
+      clearInterval(interval);
+    };
   }, []);
 
   return (

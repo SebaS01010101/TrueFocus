@@ -38,10 +38,21 @@ const axios = require("axios");
 const STATS_FILE = path.join(app.getPath("userData"), "truefocus-stats.json");
 const TB_HOST = "http://iot.ceisufro.cl:8080";
 
-// Función auxiliar para obtener fecha en formato YYYY-MM-DD
-function getDateKey() {
-  const now = new Date();
-  return now.toISOString().split("T")[0];
+function padDatePart(value) {
+  return value.toString().padStart(2, "0");
+}
+
+// Función auxiliar para obtener fecha local en formato YYYY-MM-DD
+function getDateKey(date = new Date()) {
+  return `${date.getFullYear()}-${padDatePart(date.getMonth() + 1)}-${padDatePart(date.getDate())}`;
+}
+
+function parseDateKey(dateKey) {
+  const [year, month, day] = dateKey
+    .split("-")
+    .map((part) => Number.parseInt(part, 10));
+
+  return new Date(year, month - 1, day);
 }
 
 // Configuración del dispositivo IoT TrueFocus
@@ -63,6 +74,9 @@ let mainWindow = null;
 let currentDeviceToken = DEVICE_CONFIG.accessToken; // Usar token directo del dispositivo
 let currentUserJwt = null;
 let currentDeviceId = DEVICE_CONFIG.id; // Usar ID directo del dispositivo
+let hasPresenceData = false;
+let isPollingPresence = false;
+let isTrackingActiveWindow = false;
 
 // Nueva estructura: { "YYYY-MM-DD": { "HH": { appName: { name, title, icon, seconds, lastActive } } } }
 const appUsageStatsByDay = {};
@@ -70,6 +84,29 @@ const iconCache = new Map();
 let currentPresence = false; // Estado de presencia actual
 let lastPresenceState = false; // Para detectar cambios
 let currentDateKey = getDateKey();
+const ALLOWED_RPC_METHODS = new Set(["setSessionState"]);
+
+function isValidRpcCommand(command) {
+  if (!command || typeof command !== "object") {
+    return false;
+  }
+
+  const { method, params } = command;
+
+  if (!ALLOWED_RPC_METHODS.has(method)) {
+    return false;
+  }
+
+  if (!params || typeof params !== "object") {
+    return false;
+  }
+
+  return (
+    typeof params.status === "string" &&
+    typeof params.duration_sec === "number" &&
+    Number.isFinite(params.duration_sec)
+  );
+}
 
 function loadStats() {
   try {
@@ -207,7 +244,10 @@ async function startAppTracking() {
 
   // Verificar presencia cada 2 segundos
   setInterval(async () => {
+    if (isPollingPresence) return;
     if (currentUserJwt && currentDeviceId) {
+      isPollingPresence = true;
+
       try {
         const url = `${TB_HOST}/api/plugins/telemetry/DEVICE/${currentDeviceId}/values/timeseries?keys=presence`;
         const resp = await axios.get(url, {
@@ -215,6 +255,7 @@ async function startAppTracking() {
         });
 
         if (resp.data.presence && resp.data.presence[0]) {
+          hasPresenceData = true;
           const presenceValue = resp.data.presence[0].value;
           currentPresence = presenceValue === "true" || presenceValue === "1";
 
@@ -230,6 +271,11 @@ async function startAppTracking() {
           }
         }
       } catch {
+        if (!hasPresenceData) {
+          isPollingPresence = false;
+          return;
+        }
+
         // Si falla, asumir que no hay presencia
         const previousState = currentPresence;
         currentPresence = false;
@@ -244,11 +290,16 @@ async function startAppTracking() {
             timestamp: Date.now(),
           });
         }
+      } finally {
+        isPollingPresence = false;
       }
     }
   }, 2000);
 
   setInterval(async () => {
+    if (isTrackingActiveWindow) return;
+    isTrackingActiveWindow = true;
+
     try {
       // Verificar si cambió el día
       const newDateKey = getDateKey();
@@ -324,6 +375,8 @@ async function startAppTracking() {
       mainWindow.webContents.send("app-usage:update", sortedStats);
     } catch {
       /* Ventana no disponible */
+    } finally {
+      isTrackingActiveWindow = false;
     }
   }, 1000);
 
@@ -409,8 +462,9 @@ ipcMain.handle("iot:get-data", async () => {
 // IPC: Obtener estado actual de tracking
 ipcMain.handle("tracking:get-status", () => {
   return {
-    isTracking: currentPresence,
-    presenceDetected: currentPresence,
+    isTracking: hasPresenceData ? currentPresence : true,
+    presenceDetected: hasPresenceData ? currentPresence : true,
+    hasPresenceData,
   };
 });
 
@@ -482,12 +536,12 @@ ipcMain.handle("stats:get-weekly-summary", async (_event, weekStartDate) => {
   };
 
   // Calcular 7 días desde weekStartDate
-  const startDate = new Date(weekStartDate);
+  const startDate = parseDateKey(weekStartDate);
 
   for (let i = 0; i < 7; i++) {
     const date = new Date(startDate);
     date.setDate(date.getDate() + i);
-    const dateKey = date.toISOString().split("T")[0];
+    const dateKey = getDateKey(date);
 
     summary.dates.push(dateKey);
     summary.dailyTotals[dateKey] = 0;
@@ -523,6 +577,13 @@ ipcMain.handle("rpc:send-command", async (_event, { method, params }) => {
     return {
       success: false,
       error: "No hay autenticación o dispositivo configurado",
+    };
+  }
+
+  if (!isValidRpcCommand({ method, params })) {
+    return {
+      success: false,
+      error: "Comando RPC inválido",
     };
   }
 

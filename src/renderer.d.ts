@@ -32,6 +32,8 @@ export interface TrackingStatus {
   isTracking: boolean;
   /** Si hay presencia detectada */
   presenceDetected: boolean;
+  /** Si ya existe una lectura válida de presencia */
+  hasPresenceData: boolean;
 }
 
 /**
@@ -93,9 +95,12 @@ export interface WeeklySummary {
  */
 export interface RpcCommand {
   /** Nombre del método RPC */
-  method: string;
+  method: "setSessionState";
   /** Parámetros del método */
-  params: Record<string, unknown>;
+  params: {
+    status: string;
+    duration_sec: number;
+  };
 }
 
 /**

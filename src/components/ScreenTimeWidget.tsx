@@ -6,59 +6,81 @@ import {
   CATEGORY_INFO,
   type CategoryType,
 } from "../utils/categorizer";
+import {
+  addDaysToDateKey,
+  getDateKey,
+  getWeekStartDateKey,
+  parseDateKey,
+} from "../utils/localDate";
 
 type ViewMode = "daily" | "weekly";
 
 export default function ScreenTimeWidget() {
   const [viewMode, setViewMode] = useState<ViewMode>("weekly");
-  const [selectedDate] = useState<string>(
-    new Date().toISOString().split("T")[0],
-  );
+  const [selectedDate] = useState<string>(() => getDateKey());
   const [weeklyData, setWeeklyData] = useState<
     Record<string, Record<CategoryType, number>>
   >({});
   const [dailyData, setDailyData] = useState<
     Record<number, Record<CategoryType, number>>
   >({});
-  // Obtener el lunes de la semana
-  const getWeekStart = (dateStr: string): string => {
-    const date = new Date(dateStr);
-    const day = date.getDay();
-    const diff = date.getDate() - day + (day === 0 ? -6 : 1);
-    const monday = new Date(date.setDate(diff));
-    return monday.toISOString().split("T")[0];
-  };
 
   // Cargar datos semanales
   useEffect(() => {
-    if (viewMode === "weekly" && window.api?.getWeeklySummary) {
-      const weekStart = getWeekStart(selectedDate);
-      window.api.getWeeklySummary(weekStart).then((summary) => {
-        const weekData: Record<string, Record<CategoryType, number>> = {};
-
-        // Procesar cada día de la semana
-        for (const date of summary.dates) {
-          // Obtener estadísticas del día
-          if (window.api?.getStatsByDate) {
-            window.api.getStatsByDate(date).then((stats) => {
-              const dayApps: AppUsageItem[] = Object.values(stats);
-              weekData[date] = calculateCategoryStats(dayApps);
-            });
-          }
-        }
-
-        setWeeklyData(weekData);
-      });
+    if (
+      viewMode !== "weekly" ||
+      !window.api?.getWeeklySummary ||
+      !window.api?.getStatsByDate
+    ) {
+      return;
     }
+
+    let isCancelled = false;
+
+    const loadWeeklyData = async () => {
+      try {
+        const summary = await window.api.getWeeklySummary(
+          getWeekStartDateKey(selectedDate),
+        );
+
+        const entries = await Promise.all(
+          summary.dates.map(async (date) => {
+            const stats = await window.api.getStatsByDate(date);
+            const dayApps: AppUsageItem[] = Object.values(stats);
+            return [date, calculateCategoryStats(dayApps)] as const;
+          }),
+        );
+
+        if (!isCancelled) {
+          setWeeklyData(Object.fromEntries(entries));
+        }
+      } catch {
+        if (!isCancelled) {
+          setWeeklyData({});
+        }
+      }
+    };
+
+    void loadWeeklyData();
+
+    return () => {
+      isCancelled = true;
+    };
   }, [viewMode, selectedDate]);
 
   // Cargar datos diarios reales (por hora)
   useEffect(() => {
-    if (viewMode === "daily" && window.api?.getStatsByDateHourly) {
-      window.api.getStatsByDateHourly(selectedDate).then((hourlyStats) => {
+    if (viewMode !== "daily" || !window.api?.getStatsByDateHourly) {
+      return;
+    }
+
+    let isCancelled = false;
+
+    const loadDailyData = async () => {
+      try {
+        const hourlyStats = await window.api.getStatsByDateHourly(selectedDate);
         const hourlyData: Record<number, Record<CategoryType, number>> = {};
 
-        // Inicializar todas las horas
         for (let hour = 0; hour < 24; hour++) {
           hourlyData[hour] = {
             Entertainment: 0,
@@ -71,16 +93,27 @@ export default function ScreenTimeWidget() {
           };
         }
 
-        // Procesar datos reales por hora
         for (const hourStr in hourlyStats) {
-          const hour = parseInt(hourStr);
+          const hour = Number.parseInt(hourStr, 10);
           const hourApps: AppUsageItem[] = Object.values(hourlyStats[hourStr]);
           hourlyData[hour] = calculateCategoryStats(hourApps);
         }
 
-        setDailyData(hourlyData);
-      });
-    }
+        if (!isCancelled) {
+          setDailyData(hourlyData);
+        }
+      } catch {
+        if (!isCancelled) {
+          setDailyData({});
+        }
+      }
+    };
+
+    void loadDailyData();
+
+    return () => {
+      isCancelled = true;
+    };
   }, [viewMode, selectedDate]);
 
   // Formatear duración
@@ -130,12 +163,10 @@ export default function ScreenTimeWidget() {
         );
 
   // Obtener días de la semana
-  const weekStart = getWeekStart(selectedDate);
-  const weekDays = Array.from({ length: 7 }, (_, i) => {
-    const date = new Date(weekStart);
-    date.setDate(date.getDate() + i);
-    return date.toISOString().split("T")[0];
-  });
+  const weekStart = getWeekStartDateKey(selectedDate);
+  const weekDays = Array.from({ length: 7 }, (_, i) =>
+    addDaysToDateKey(weekStart, i),
+  );
 
   // Renderizar barra apilada
   function renderStackedBar(data: Record<CategoryType, number>, label: string) {
@@ -220,7 +251,7 @@ export default function ScreenTimeWidget() {
       <div className="flex-1 flex items-end justify-between gap-1 mb-3">
         {viewMode === "weekly"
           ? weekDays.map((date) => {
-              const dayName = new Date(date)
+              const dayName = parseDateKey(date)
                 .toLocaleDateString("es-ES", { weekday: "short" })
                 .charAt(0)
                 .toUpperCase();

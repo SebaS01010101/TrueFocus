@@ -260,6 +260,7 @@ function App() {
       )}
 
       <SettingsModal
+        key={`${isSettingsOpen ? "open" : "closed"}-${settings.workDuration}-${settings.shortBreakDuration}-${settings.longBreakDuration}`}
         isOpen={isSettingsOpen}
         onClose={() => setIsSettingsOpen(false)}
         currentSettings={settings}

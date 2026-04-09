@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect } from "react";
 import {
   ChevronLeft,
   ChevronRight,
@@ -7,6 +7,12 @@ import {
   Clock,
 } from "lucide-react";
 import type { AppUsageByDate, WeeklySummary } from "../renderer";
+import {
+  addDaysToDateKey,
+  getDateKey,
+  getWeekStartDateKey,
+  parseDateKey,
+} from "../utils/localDate";
 
 type ViewMode = "daily" | "weekly";
 
@@ -16,72 +22,95 @@ interface ScreenTimeProps {
 
 function ScreenTime({ onClose }: ScreenTimeProps) {
   const [viewMode, setViewMode] = useState<ViewMode>("daily");
-  const [selectedDate, setSelectedDate] = useState<string>(
-    new Date().toISOString().split("T")[0],
-  );
+  const [selectedDate, setSelectedDate] = useState<string>(() => getDateKey());
   const [dailyStats, setDailyStats] = useState<AppUsageByDate>({});
   const [weeklySummary, setWeeklySummary] = useState<WeeklySummary | null>(
     null,
   );
-  // Obtener el lunes de la semana
-  const getWeekStart = useCallback((dateStr: string): string => {
-    const date = new Date(dateStr);
-    const day = date.getDay();
-    const diff = date.getDate() - day + (day === 0 ? -6 : 1);
-    const monday = new Date(date.setDate(diff));
-    return monday.toISOString().split("T")[0];
-  }, []);
 
   // Cargar estadísticas diarias
   useEffect(() => {
-    if (viewMode === "daily" && window.api?.getStatsByDate) {
-      window.api.getStatsByDate(selectedDate).then((stats) => {
-        setDailyStats(stats);
-      });
+    if (viewMode !== "daily" || !window.api?.getStatsByDate) {
+      return;
     }
+
+    let isCancelled = false;
+
+    const loadDailyStats = async () => {
+      try {
+        const stats = await window.api.getStatsByDate(selectedDate);
+
+        if (!isCancelled) {
+          setDailyStats(stats);
+        }
+      } catch {
+        if (!isCancelled) {
+          setDailyStats({});
+        }
+      }
+    };
+
+    void loadDailyStats();
+
+    return () => {
+      isCancelled = true;
+    };
   }, [viewMode, selectedDate]);
 
   // Cargar resumen semanal
   useEffect(() => {
-    if (viewMode === "weekly" && window.api?.getWeeklySummary) {
-      const weekStart = getWeekStart(selectedDate);
-      window.api.getWeeklySummary(weekStart).then((summary) => {
-        setWeeklySummary(summary);
-      });
+    if (viewMode !== "weekly" || !window.api?.getWeeklySummary) {
+      return;
     }
-  }, [viewMode, selectedDate, getWeekStart]);
+
+    let isCancelled = false;
+
+    const loadWeeklySummary = async () => {
+      try {
+        const summary = await window.api.getWeeklySummary(
+          getWeekStartDateKey(selectedDate),
+        );
+
+        if (!isCancelled) {
+          setWeeklySummary(summary);
+        }
+      } catch {
+        if (!isCancelled) {
+          setWeeklySummary(null);
+        }
+      }
+    };
+
+    void loadWeeklySummary();
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [viewMode, selectedDate]);
 
   // Navegar a día anterior
   function goToPreviousDay() {
-    const date = new Date(selectedDate);
-    date.setDate(date.getDate() - 1);
-    setSelectedDate(date.toISOString().split("T")[0]);
+    setSelectedDate(addDaysToDateKey(selectedDate, -1));
   }
 
   // Navegar a día siguiente
   function goToNextDay() {
-    const date = new Date(selectedDate);
-    date.setDate(date.getDate() + 1);
-    const today = new Date().toISOString().split("T")[0];
-    if (date.toISOString().split("T")[0] <= today) {
-      setSelectedDate(date.toISOString().split("T")[0]);
+    const nextDate = addDaysToDateKey(selectedDate, 1);
+    if (nextDate <= getDateKey()) {
+      setSelectedDate(nextDate);
     }
   }
 
   // Navegar a semana anterior
   function goToPreviousWeek() {
-    const date = new Date(selectedDate);
-    date.setDate(date.getDate() - 7);
-    setSelectedDate(date.toISOString().split("T")[0]);
+    setSelectedDate(addDaysToDateKey(selectedDate, -7));
   }
 
   // Navegar a semana siguiente
   function goToNextWeek() {
-    const date = new Date(selectedDate);
-    date.setDate(date.getDate() + 7);
-    const today = new Date().toISOString().split("T")[0];
-    if (date.toISOString().split("T")[0] <= today) {
-      setSelectedDate(date.toISOString().split("T")[0]);
+    const nextDate = addDaysToDateKey(selectedDate, 7);
+    if (nextDate <= getDateKey()) {
+      setSelectedDate(nextDate);
     }
   }
 
@@ -98,17 +127,12 @@ function ScreenTime({ onClose }: ScreenTimeProps) {
 
   // Formatear fecha
   function formatDate(dateStr: string): string {
-    const date = new Date(dateStr);
-    const today = new Date();
-    const yesterday = new Date(today);
-    yesterday.setDate(yesterday.getDate() - 1);
+    const date = parseDateKey(dateStr);
+    const todayKey = getDateKey();
+    const yesterdayKey = addDaysToDateKey(todayKey, -1);
 
-    const dateKey = dateStr;
-    const todayKey = today.toISOString().split("T")[0];
-    const yesterdayKey = yesterday.toISOString().split("T")[0];
-
-    if (dateKey === todayKey) return "Hoy";
-    if (dateKey === yesterdayKey) return "Ayer";
+    if (dateStr === todayKey) return "Hoy";
+    if (dateStr === yesterdayKey) return "Ayer";
 
     return date.toLocaleDateString("es-ES", {
       weekday: "long",
@@ -119,9 +143,8 @@ function ScreenTime({ onClose }: ScreenTimeProps) {
 
   // Formatear rango de semana
   function formatWeekRange(weekStart: string): string {
-    const start = new Date(weekStart);
-    const end = new Date(start);
-    end.setDate(end.getDate() + 6);
+    const start = parseDateKey(weekStart);
+    const end = parseDateKey(addDaysToDateKey(weekStart, 6));
 
     return `${start.getDate()} ${start.toLocaleDateString("es-ES", { month: "short" })} - ${end.getDate()} ${end.toLocaleDateString("es-ES", { month: "short" })}`;
   }
@@ -149,13 +172,9 @@ function ScreenTime({ onClose }: ScreenTimeProps) {
 
   // Verificar si puede ir al siguiente
   const canGoNext =
-    new Date(
-      viewMode === "daily"
-        ? selectedDate
-        : new Date(selectedDate).setDate(new Date(selectedDate).getDate() + 7),
-    )
-      .toISOString()
-      .split("T")[0] <= new Date().toISOString().split("T")[0];
+    (viewMode === "daily"
+      ? addDaysToDateKey(selectedDate, 1)
+      : addDaysToDateKey(selectedDate, 7)) <= getDateKey();
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
@@ -212,11 +231,11 @@ function ScreenTime({ onClose }: ScreenTimeProps) {
           </button>
 
           <div className="text-center">
-            <h3 className="text-lg font-semibold">
-              {viewMode === "daily"
-                ? formatDate(selectedDate)
-                : formatWeekRange(getWeekStart(selectedDate))}
-            </h3>
+              <h3 className="text-lg font-semibold">
+                {viewMode === "daily"
+                  ? formatDate(selectedDate)
+                  : formatWeekRange(getWeekStartDateKey(selectedDate))}
+              </h3>
             {viewMode === "daily" && (
               <p className="text-sm text-gray-500">{selectedDate}</p>
             )}
@@ -354,7 +373,7 @@ function ScreenTime({ onClose }: ScreenTimeProps) {
                         );
                         const heightPercent =
                           maxTotal > 0 ? (dayTotal / maxTotal) * 100 : 0;
-                        const dayName = new Date(date).toLocaleDateString(
+                        const dayName = parseDateKey(date).toLocaleDateString(
                           "es-ES",
                           { weekday: "short" },
                         );

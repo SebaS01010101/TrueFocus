@@ -11,6 +11,7 @@ import {
   Bug,
 } from "lucide-react";
 import type { PomodoroTelemetry, PomodoroSettings } from "../shared/types";
+import { usePresenceStatus } from "../usePresenceStatus";
 
 interface PomodoroProps {
   onCycleComplete?: () => void;
@@ -21,10 +22,13 @@ interface PomodoroProps {
 type TimerMode = "WORK" | "BREAK";
 
 function Pomodoro({ onCycleComplete, settings, currentCycle }: PomodoroProps) {
-  const [timeLeft, setTimeLeft] = useState(settings.workDuration * 60);
+  const { isPresent, hasLoaded } = usePresenceStatus(true);
+  const workDurationMinutes = Math.max(1, settings.workDuration);
+  const shortBreakDurationMinutes = Math.max(1, settings.shortBreakDuration);
+  const longBreakDurationMinutes = Math.max(1, settings.longBreakDuration);
+  const [timeLeft, setTimeLeft] = useState(workDurationMinutes * 60);
   const [isActive, setIsActive] = useState(false);
   const [mode, setMode] = useState<TimerMode>("WORK");
-  const [isPresent, setIsPresent] = useState<boolean>(true);
   const [wasAutoPaused, setWasAutoPaused] = useState<boolean>(false);
   const [wasManuallyStarted, setWasManuallyStarted] = useState<boolean>(false);
   const [debugMode, setDebugMode] = useState<boolean>(false);
@@ -38,7 +42,8 @@ function Pomodoro({ onCycleComplete, settings, currentCycle }: PomodoroProps) {
   const wasPausedRef = useRef(wasAutoPaused);
   const modeRef = useRef(mode);
   const timeLeftRef = useRef(timeLeft);
-  const presenceCountRef = useRef(presenceDuringBreak);
+  const isPresentRef = useRef(isPresent);
+  const hasLoadedRef = useRef(hasLoaded);
   const warningShownRef = useRef(breakWarningShown);
 
   // Actualizar refs cuando cambian los estados
@@ -47,13 +52,16 @@ function Pomodoro({ onCycleComplete, settings, currentCycle }: PomodoroProps) {
     wasPausedRef.current = wasAutoPaused;
     modeRef.current = mode;
     timeLeftRef.current = timeLeft;
-    presenceCountRef.current = presenceDuringBreak;
+    isPresentRef.current = isPresent;
+    hasLoadedRef.current = hasLoaded;
     warningShownRef.current = breakWarningShown;
   }, [
     isActive,
     wasAutoPaused,
     mode,
     timeLeft,
+    isPresent,
+    hasLoaded,
     presenceDuringBreak,
     breakWarningShown,
   ]);
@@ -65,10 +73,10 @@ function Pomodoro({ onCycleComplete, settings, currentCycle }: PomodoroProps) {
 
   const targetTime =
     mode === "WORK"
-      ? settings.workDuration * 60
+      ? workDurationMinutes * 60
       : isLongBreak
-        ? settings.longBreakDuration * 60
-        : settings.shortBreakDuration * 60;
+        ? longBreakDurationMinutes * 60
+        : shortBreakDurationMinutes * 60;
 
   // Sincronizar tiempo cuando cambia la configuración (solo si no está activo, no fue pausado automáticamente, y no fue iniciado manualmente)
   useEffect(() => {
@@ -184,112 +192,117 @@ function Pomodoro({ onCycleComplete, settings, currentCycle }: PomodoroProps) {
     [sendRpcToArduino],
   );
 
-  // Monitorear presencia del usuario desde el dispositivo IoT
   useEffect(() => {
-    const previousPresenceRef = { current: isPresent };
+    if (!debugMode || !window.api?.getIoTData) return;
 
-    const checkPresence = async () => {
-      if (!window.api?.getIoTData) return;
+    let isMounted = true;
 
+    const fetchIotDebugData = async () => {
       try {
         const data = await window.api.getIoTData();
+        if (!isMounted) return;
+
         setIotDebugData(data);
         setLastIotCheck(new Date().toLocaleTimeString());
-
-        if (data?.presence) {
-          const present =
-            data.presence.value === "true" || data.presence.value === "1";
-
-          // Detectar cambio de presencia
-          const presenceChanged = present !== previousPresenceRef.current;
-
-          if (presenceChanged) {
-            setIsPresent(present);
-
-            // === LÓGICA PARA MODO WORK ===
-            if (modeRef.current === "WORK") {
-              // Si la persona se fue y el timer estaba activo
-              if (!present && isActiveRef.current) {
-                setIsActive(false);
-                setWasAutoPaused(true);
-                sendPomodoroUpdate("PAUSED", timeLeftRef.current);
-                notifyUser(
-                  "⚠️ Ausencia detectada. Timer pausado automáticamente.",
-                );
-              }
-
-              // Si la persona regresó y fue pausado automáticamente
-              if (present && wasPausedRef.current && !isActiveRef.current) {
-                setIsActive(true);
-                setWasAutoPaused(false);
-                sendPomodoroUpdate("RUNNING", timeLeftRef.current);
-                notifyUser("✅ Presencia detectada. Timer reanudado.");
-              }
-            }
-
-            previousPresenceRef.current = present;
-          }
-
-          // === LÓGICA PARA MODO BREAK ===
-          if (modeRef.current === "BREAK") {
-            if (present && isActiveRef.current) {
-              // Incrementar contador de presencia durante descanso
-              setPresenceDuringBreak((prev) => {
-                const newCount = prev + 1;
-
-                // Primera advertencia (1 check = 3 segundos)
-                if (newCount === 1 && !warningShownRef.current) {
-                  notifyUser(
-                    "⏸️ Estás en descanso. Aléjate del PC para aprovechar tu pausa.",
-                  );
-                  setBreakWarningShown(true);
-                  // Enviar estado WARNING al Arduino
-                  sendRpcToArduino("WARNING", timeLeftRef.current);
-                }
-
-                // Segunda advertencia y pausa (3 checks = ~10 segundos)
-                if (newCount >= 3) {
-                  setIsActive(false);
-                  setWasAutoPaused(true);
-                  sendPomodoroUpdate("PAUSED", timeLeftRef.current);
-                  notifyUser(
-                    "⏸️ Descanso pausado. Recuerda: los descansos son importantes para tu productividad.",
-                  );
-                  setBreakWarningShown(false);
-                  // El Arduino ya recibirá PAUSED a través de sendPomodoroUpdate
-                  return 0; // Resetear contador
-                }
-
-                return newCount;
-              });
-            } else if (!present) {
-              // Si la persona se va y el timer fue pausado automáticamente, reanudarlo
-              if (wasPausedRef.current && !isActiveRef.current) {
-                setIsActive(true);
-                setWasAutoPaused(false);
-                sendPomodoroUpdate("RUNNING", timeLeftRef.current);
-                notifyUser("✅ Ausencia detectada. Descanso reanudado.");
-              } else if (warningShownRef.current && isActiveRef.current) {
-                // Si la persona se va durante el warning, volver a RUNNING normal
-                sendRpcToArduino("RUNNING", timeLeftRef.current);
-              }
-              // Resetear contadores si la persona se va
-              setPresenceDuringBreak(0);
-              setBreakWarningShown(false);
-            }
-          }
-        }
       } catch (error) {
-        console.error("Error al verificar presencia:", error);
+        if (!isMounted) return;
+
+        setIotDebugData({
+          error: error instanceof Error ? error.message : String(error),
+        });
+        setLastIotCheck(new Date().toLocaleTimeString());
       }
     };
 
-    // Verificar presencia cada 3 segundos
-    const interval = setInterval(checkPresence, 3000);
-    checkPresence(); // Llamada inicial
+    void fetchIotDebugData();
+
+    const interval = setInterval(() => {
+      void fetchIotDebugData();
+    }, 3000);
+
+    return () => {
+      isMounted = false;
+      clearInterval(interval);
+    };
+  }, [debugMode]);
+
+  useEffect(() => {
+    if (!window.api?.onPresenceChanged) return;
+
+    const unsubscribe = window.api.onPresenceChanged((event) => {
+      if (modeRef.current !== "WORK") return;
+
+      if (!event.isPresent && isActiveRef.current) {
+        setIsActive(false);
+        setWasAutoPaused(true);
+        sendPomodoroUpdate("PAUSED", timeLeftRef.current);
+        notifyUser("⚠️ Ausencia detectada. Timer pausado automáticamente.");
+        return;
+      }
+
+      if (event.isPresent && wasPausedRef.current && !isActiveRef.current) {
+        setIsActive(true);
+        setWasAutoPaused(false);
+        sendPomodoroUpdate("RUNNING", timeLeftRef.current);
+        notifyUser("✅ Presencia detectada. Timer reanudado.");
+      }
+    });
+
+    return () => unsubscribe();
+  }, [notifyUser, sendPomodoroUpdate]);
+
+  useEffect(() => {
+    if (mode !== "BREAK") return;
+
+    const interval = setInterval(() => {
+      if (!hasLoadedRef.current) return;
+
+      if (isPresentRef.current && isActiveRef.current) {
+        setPresenceDuringBreak((prev) => {
+          const newCount = prev + 1;
+
+          if (newCount === 1 && !warningShownRef.current) {
+            notifyUser(
+              "⏸️ Estás en descanso. Aléjate del PC para aprovechar tu pausa.",
+            );
+            setBreakWarningShown(true);
+            sendRpcToArduino("WARNING", timeLeftRef.current);
+          }
+
+          if (newCount >= 3) {
+            setIsActive(false);
+            setWasAutoPaused(true);
+            sendPomodoroUpdate("PAUSED", timeLeftRef.current);
+            notifyUser(
+              "⏸️ Descanso pausado. Recuerda: los descansos son importantes para tu productividad.",
+            );
+            setBreakWarningShown(false);
+            return 0;
+          }
+
+          return newCount;
+        });
+
+        return;
+      }
+
+      if (!isPresentRef.current) {
+        if (wasPausedRef.current && !isActiveRef.current) {
+          setIsActive(true);
+          setWasAutoPaused(false);
+          sendPomodoroUpdate("RUNNING", timeLeftRef.current);
+          notifyUser("✅ Ausencia detectada. Descanso reanudado.");
+        } else if (warningShownRef.current && isActiveRef.current) {
+          sendRpcToArduino("RUNNING", timeLeftRef.current);
+        }
+
+        setPresenceDuringBreak(0);
+        setBreakWarningShown(false);
+      }
+    }, 3000);
+
     return () => clearInterval(interval);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sendPomodoroUpdate, notifyUser]); // Solo dependencias de funciones estables
+  }, [hasLoaded, mode, notifyUser, sendPomodoroUpdate, sendRpcToArduino]);
 
   const handleTimerComplete = useCallback(() => {
     sendPomodoroUpdate("COMPLETED", 0);
@@ -305,8 +318,8 @@ function Pomodoro({ onCycleComplete, settings, currentCycle }: PomodoroProps) {
 
       setTimeLeft(
         isLong
-          ? settings.longBreakDuration * 60
-          : settings.shortBreakDuration * 60,
+          ? longBreakDurationMinutes * 60
+          : shortBreakDurationMinutes * 60,
       );
       notifyUser(
         isLong ? "¡Gran trabajo! Toca descanso largo." : "Descanso corto.",
@@ -317,7 +330,7 @@ function Pomodoro({ onCycleComplete, settings, currentCycle }: PomodoroProps) {
       setBreakWarningShown(false);
     } else {
       nextMode = "WORK";
-      setTimeLeft(settings.workDuration * 60);
+      setTimeLeft(workDurationMinutes * 60);
       notifyUser("¡A trabajar!");
     }
 
@@ -326,9 +339,11 @@ function Pomodoro({ onCycleComplete, settings, currentCycle }: PomodoroProps) {
     mode,
     sendPomodoroUpdate,
     onCycleComplete,
-    settings,
     currentCycle,
+    longBreakDurationMinutes,
     notifyUser,
+    shortBreakDurationMinutes,
+    workDurationMinutes,
   ]);
 
   const handleTimerCompleteRef = useRef(handleTimerComplete);
@@ -381,13 +396,13 @@ function Pomodoro({ onCycleComplete, settings, currentCycle }: PomodoroProps) {
     setMode(nextMode);
 
     if (nextMode === "WORK") {
-      setTimeLeft(settings.workDuration * 60);
+      setTimeLeft(workDurationMinutes * 60);
     } else {
       const isLong = (currentCycle + 1) % 4 === 0;
       setTimeLeft(
         isLong
-          ? settings.longBreakDuration * 60
-          : settings.shortBreakDuration * 60,
+          ? longBreakDurationMinutes * 60
+          : shortBreakDurationMinutes * 60,
       );
     }
 
@@ -405,7 +420,10 @@ function Pomodoro({ onCycleComplete, settings, currentCycle }: PomodoroProps) {
     const secs = (seconds % 60).toString().padStart(2, "0");
     return `${mins}:${secs}`;
   };
-  const progressPercent = ((targetTime - timeLeft) / targetTime) * 100;
+  const progressPercent =
+    targetTime > 0
+      ? Math.min(100, Math.max(0, ((targetTime - timeLeft) / targetTime) * 100))
+      : 0;
 
   return (
     <div className="glass-card rounded-3xl flex flex-col items-center justify-between w-full h-full p-5 transition-all duration-300">
@@ -465,7 +483,7 @@ function Pomodoro({ onCycleComplete, settings, currentCycle }: PomodoroProps) {
         <button
           onClick={() => {
             setMode("WORK");
-            setTimeLeft(settings.workDuration * 60);
+            setTimeLeft(workDurationMinutes * 60);
             setIsActive(false);
             setWasAutoPaused(false);
             setPresenceDuringBreak(0);
@@ -487,8 +505,8 @@ function Pomodoro({ onCycleComplete, settings, currentCycle }: PomodoroProps) {
             const isLong = (currentCycle + 1) % 4 === 0;
             setTimeLeft(
               isLong
-                ? settings.longBreakDuration * 60
-                : settings.shortBreakDuration * 60,
+                ? longBreakDurationMinutes * 60
+                : shortBreakDurationMinutes * 60,
             );
             setIsActive(false);
             setWasAutoPaused(false);

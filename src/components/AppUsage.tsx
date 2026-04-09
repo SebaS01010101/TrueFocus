@@ -1,9 +1,9 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { LayoutGrid, ChevronRight, Pause, Clock } from "lucide-react";
 import type { AppUsageItem } from "../shared/types";
-import type { PresenceChangedEvent } from "../renderer";
 import AppUsageModal from "./AppUsageModal";
 import ScreenTime from "./ScreenTime";
+import { usePresenceStatus } from "../usePresenceStatus";
 
 interface AppUsageProps {
   apps: AppUsageItem[];
@@ -12,44 +12,35 @@ interface AppUsageProps {
 export default function AppUsage({ apps }: AppUsageProps) {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isScreenTimeOpen, setIsScreenTimeOpen] = useState(false);
-  const [isPresent, setIsPresent] = useState(true);
   const [showNotification, setShowNotification] = useState(false);
+  const { isPresent } = usePresenceStatus(true);
+  const notificationTimeoutRef = useRef<number | null>(null);
 
-  // Suscribirse a eventos de cambio de presencia
   useEffect(() => {
     if (!window.api?.onPresenceChanged) return;
 
-    const unsubscribe = window.api.onPresenceChanged(
-      (event: PresenceChangedEvent) => {
-        setIsPresent(event.isPresent);
+    const unsubscribe = window.api.onPresenceChanged(() => {
+      setShowNotification(true);
 
-        // Mostrar notificación temporal cuando cambia
-        setShowNotification(true);
-        setTimeout(() => setShowNotification(false), 3000);
-      },
-    );
+      if (notificationTimeoutRef.current !== null) {
+        window.clearTimeout(notificationTimeoutRef.current);
+      }
+
+      notificationTimeoutRef.current = window.setTimeout(() => {
+        setShowNotification(false);
+        notificationTimeoutRef.current = null;
+      }, 3000);
+    });
 
     return () => unsubscribe();
   }, []);
 
-  // Verificación inicial de presencia
   useEffect(() => {
-    const checkPresence = async () => {
-      if (!window.api?.getIoTData) return;
-
-      try {
-        const data = await window.api.getIoTData();
-        if (data?.presence) {
-          const present =
-            data.presence.value === "true" || data.presence.value === "1";
-          setIsPresent(present);
-        }
-      } catch {
-        setIsPresent(true);
+    return () => {
+      if (notificationTimeoutRef.current !== null) {
+        window.clearTimeout(notificationTimeoutRef.current);
       }
     };
-
-    checkPresence();
   }, []);
 
   const formatTime = (seconds: number) => {
