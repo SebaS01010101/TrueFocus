@@ -6,59 +6,81 @@ import {
   CATEGORY_INFO,
   type CategoryType,
 } from "../utils/categorizer";
+import {
+  addDaysToDateKey,
+  getDateKey,
+  getWeekStartDateKey,
+  parseDateKey,
+} from "../utils/localDate";
 
 type ViewMode = "daily" | "weekly";
 
 export default function ScreenTimeWidget() {
   const [viewMode, setViewMode] = useState<ViewMode>("weekly");
-  const [selectedDate] = useState<string>(
-    new Date().toISOString().split("T")[0],
-  );
+  const [selectedDate] = useState<string>(() => getDateKey());
   const [weeklyData, setWeeklyData] = useState<
     Record<string, Record<CategoryType, number>>
   >({});
   const [dailyData, setDailyData] = useState<
     Record<number, Record<CategoryType, number>>
   >({});
-  // Obtener el lunes de la semana
-  const getWeekStart = (dateStr: string): string => {
-    const date = new Date(dateStr);
-    const day = date.getDay();
-    const diff = date.getDate() - day + (day === 0 ? -6 : 1);
-    const monday = new Date(date.setDate(diff));
-    return monday.toISOString().split("T")[0];
-  };
 
   // Cargar datos semanales
   useEffect(() => {
-    if (viewMode === "weekly" && window.api?.getWeeklySummary) {
-      const weekStart = getWeekStart(selectedDate);
-      window.api.getWeeklySummary(weekStart).then((summary) => {
-        const weekData: Record<string, Record<CategoryType, number>> = {};
-
-        // Procesar cada día de la semana
-        for (const date of summary.dates) {
-          // Obtener estadísticas del día
-          if (window.api?.getStatsByDate) {
-            window.api.getStatsByDate(date).then((stats) => {
-              const dayApps: AppUsageItem[] = Object.values(stats);
-              weekData[date] = calculateCategoryStats(dayApps);
-            });
-          }
-        }
-
-        setWeeklyData(weekData);
-      });
+    if (
+      viewMode !== "weekly" ||
+      !window.api?.getWeeklySummary ||
+      !window.api?.getStatsByDate
+    ) {
+      return;
     }
+
+    let isCancelled = false;
+
+    const loadWeeklyData = async () => {
+      try {
+        const summary = await window.api.getWeeklySummary(
+          getWeekStartDateKey(selectedDate),
+        );
+
+        const entries = await Promise.all(
+          summary.dates.map(async (date) => {
+            const stats = await window.api.getStatsByDate(date);
+            const dayApps: AppUsageItem[] = Object.values(stats);
+            return [date, calculateCategoryStats(dayApps)] as const;
+          }),
+        );
+
+        if (!isCancelled) {
+          setWeeklyData(Object.fromEntries(entries));
+        }
+      } catch {
+        if (!isCancelled) {
+          setWeeklyData({});
+        }
+      }
+    };
+
+    void loadWeeklyData();
+
+    return () => {
+      isCancelled = true;
+    };
   }, [viewMode, selectedDate]);
 
   // Cargar datos diarios reales (por hora)
   useEffect(() => {
-    if (viewMode === "daily" && window.api?.getStatsByDateHourly) {
-      window.api.getStatsByDateHourly(selectedDate).then((hourlyStats) => {
+    if (viewMode !== "daily" || !window.api?.getStatsByDateHourly) {
+      return;
+    }
+
+    let isCancelled = false;
+
+    const loadDailyData = async () => {
+      try {
+        const hourlyStats = await window.api.getStatsByDateHourly(selectedDate);
         const hourlyData: Record<number, Record<CategoryType, number>> = {};
 
-        // Inicializar todas las horas
         for (let hour = 0; hour < 24; hour++) {
           hourlyData[hour] = {
             Entertainment: 0,
@@ -71,16 +93,27 @@ export default function ScreenTimeWidget() {
           };
         }
 
-        // Procesar datos reales por hora
         for (const hourStr in hourlyStats) {
-          const hour = parseInt(hourStr);
+          const hour = Number.parseInt(hourStr, 10);
           const hourApps: AppUsageItem[] = Object.values(hourlyStats[hourStr]);
           hourlyData[hour] = calculateCategoryStats(hourApps);
         }
 
-        setDailyData(hourlyData);
-      });
-    }
+        if (!isCancelled) {
+          setDailyData(hourlyData);
+        }
+      } catch {
+        if (!isCancelled) {
+          setDailyData({});
+        }
+      }
+    };
+
+    void loadDailyData();
+
+    return () => {
+      isCancelled = true;
+    };
   }, [viewMode, selectedDate]);
 
   // Formatear duración
@@ -130,12 +163,10 @@ export default function ScreenTimeWidget() {
         );
 
   // Obtener días de la semana
-  const weekStart = getWeekStart(selectedDate);
-  const weekDays = Array.from({ length: 7 }, (_, i) => {
-    const date = new Date(weekStart);
-    date.setDate(date.getDate() + i);
-    return date.toISOString().split("T")[0];
-  });
+  const weekStart = getWeekStartDateKey(selectedDate);
+  const weekDays = Array.from({ length: 7 }, (_, i) =>
+    addDaysToDateKey(weekStart, i),
+  );
 
   // Renderizar barra apilada
   function renderStackedBar(data: Record<CategoryType, number>, label: string) {
@@ -143,8 +174,8 @@ export default function ScreenTimeWidget() {
     const heightPercent = (total / maxValue) * 100;
 
     return (
-      <div className="flex flex-col items-center flex-1">
-        <div className="relative w-full h-32 mb-1">
+      <div className="flex flex-1 flex-col items-center min-w-0">
+        <div className="relative mb-1 h-24 w-full">
           <div
             className="absolute bottom-0 w-full flex flex-col rounded-t-md overflow-hidden transition-all duration-300"
             style={{ height: `${heightPercent}%` }}
@@ -169,7 +200,7 @@ export default function ScreenTimeWidget() {
             })}
           </div>
         </div>
-        <p className="text-[10px] text-white/60 font-medium h-3">
+        <p className="h-3 text-[9px] font-medium text-white/60">
           {label || "\u00A0"}
         </p>
       </div>
@@ -177,9 +208,9 @@ export default function ScreenTimeWidget() {
   }
 
   return (
-    <div className="glass-card rounded-3xl p-4 w-full h-full text-white shadow-xl border border-white/10 flex flex-col">
+    <div className="glass-card flex h-full min-h-0 w-full flex-col overflow-hidden rounded-3xl border border-white/10 p-3.5 text-white shadow-xl">
       {/* Header */}
-      <div className="flex items-center justify-between mb-3">
+      <div className="mb-2.5 flex items-center justify-between gap-2">
         <div className="flex items-center gap-2">
           <Clock size={16} className="text-white/80" />
           <h3 className="text-sm font-semibold text-white/80">Screen Time</h3>
@@ -193,7 +224,7 @@ export default function ScreenTimeWidget() {
       </div>
 
       {/* Tabs */}
-      <div className="flex gap-2 mb-3 bg-white/10 rounded-lg p-1">
+      <div className="mb-2.5 flex gap-2 rounded-lg bg-white/10 p-1">
         <button
           onClick={() => setViewMode("daily")}
           className={`flex-1 py-1.5 rounded-md text-xs font-semibold transition-all ${
@@ -217,10 +248,10 @@ export default function ScreenTimeWidget() {
       </div>
 
       {/* Gráfico */}
-      <div className="flex-1 flex items-end justify-between gap-1 mb-3">
+      <div className="mb-2.5 flex min-h-0 flex-1 items-end justify-between gap-1 overflow-hidden">
         {viewMode === "weekly"
           ? weekDays.map((date) => {
-              const dayName = new Date(date)
+              const dayName = parseDateKey(date)
                 .toLocaleDateString("es-ES", { weekday: "short" })
                 .charAt(0)
                 .toUpperCase();
@@ -263,7 +294,7 @@ export default function ScreenTimeWidget() {
       </div>
 
       {/* Leyenda de categorías */}
-      <div className="grid grid-cols-4 gap-1 text-[9px]">
+      <div className="grid shrink-0 grid-cols-4 gap-1 text-[8px] leading-3">
         {(Object.keys(CATEGORY_INFO) as CategoryType[])
           .filter((cat) => {
             // Solo mostrar categorías con datos
@@ -275,7 +306,7 @@ export default function ScreenTimeWidget() {
           })
           .slice(0, 4)
           .map((category) => (
-            <div key={category} className="flex items-center gap-1">
+            <div key={category} className="flex min-w-0 items-center gap-1">
               <div
                 className="w-2 h-2 rounded-sm"
                 style={{ backgroundColor: CATEGORY_INFO[category].color }}

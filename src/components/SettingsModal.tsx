@@ -14,17 +14,25 @@ export default function SettingsModal({ isOpen, onClose, currentSettings, onSave
 
   if (!isOpen) return null;
 
+  const sanitizeDuration = (value: number) => {
+    return Number.isFinite(value) ? Math.max(1, value) : 1;
+  };
+
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const { name, value } = e.target;
     setFormData(prev => ({
       ...prev,
-      [name]: parseInt(value) || 0
+      [name]: sanitizeDuration(Number.parseInt(value, 10))
     }));
   };
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    onSave(formData);
+    onSave({
+      workDuration: sanitizeDuration(formData.workDuration),
+      shortBreakDuration: sanitizeDuration(formData.shortBreakDuration),
+      longBreakDuration: sanitizeDuration(formData.longBreakDuration),
+    });
     onClose();
   };
 
@@ -54,6 +62,7 @@ export default function SettingsModal({ isOpen, onClose, currentSettings, onSave
               name="workDuration"
               value={formData.workDuration}
               onChange={handleChange}
+              min={1}
               className="w-full bg-white/10 border border-white/10 rounded-xl p-3 text-white focus:outline-none focus:border-brand-green-500 transition font-mono"
             />
           </div>
@@ -68,6 +77,7 @@ export default function SettingsModal({ isOpen, onClose, currentSettings, onSave
               name="shortBreakDuration"
               value={formData.shortBreakDuration}
               onChange={handleChange}
+              min={1}
               className="w-full bg-white/10 border border-white/10 rounded-xl p-3 text-white focus:outline-none focus:border-blue-500 transition font-mono"
             />
           </div>
@@ -82,6 +92,7 @@ export default function SettingsModal({ isOpen, onClose, currentSettings, onSave
               name="longBreakDuration"
               value={formData.longBreakDuration}
               onChange={handleChange}
+              min={1}
               className="w-full bg-white/10 border border-white/10 rounded-xl p-3 text-white focus:outline-none focus:border-purple-500 transition font-mono"
             />
           </div>

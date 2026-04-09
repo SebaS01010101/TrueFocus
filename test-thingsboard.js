@@ -15,6 +15,17 @@ const axios = require('axios');
 const TB_HOST = 'http://iot.ceisufro.cl:8080';
 const DEVICE_ID = '76f07260-cb35-11f0-a6b4-77216114eb61';
 const ACCESS_TOKEN = '354ee7omsirwgui3zdzx';
+const TELEMETRY_KEYS = [
+  'distancia_mm',
+  'presencia',
+  'temperatura_c',
+  'eco2_ppm',
+  'focus_score',
+  'entorno_score',
+  'ergonomia_score',
+  'co2_score',
+  'pomodoro_status'
+];
 
 // Colores para la consola
 const colors = {
@@ -44,8 +55,11 @@ async function testSendTelemetry() {
     const url = `${TB_HOST}/api/v1/${ACCESS_TOKEN}/telemetry`;
 
     const testData = {
-      distance: 55.5,
-      presence: true,
+      distancia_mm: 650,
+      presencia: true,
+      temperatura_c: 22.5,
+      eco2_ppm: 550,
+      pomodoro_status: 'IDLE',
       timestamp: Date.now(),
       test: true
     };
@@ -111,7 +125,7 @@ async function testReadTelemetry(jwt) {
   header('TEST 3: Leer Telemetría del Dispositivo');
 
   try {
-    const url = `${TB_HOST}/api/plugins/telemetry/DEVICE/${DEVICE_ID}/values/timeseries?keys=distance,presence`;
+    const url = `${TB_HOST}/api/plugins/telemetry/DEVICE/${DEVICE_ID}/values/timeseries?keys=${TELEMETRY_KEYS.join(',')}`;
 
     log(`URL: ${url}`, 'blue');
     log(`Device ID: ${DEVICE_ID}`, 'blue');
@@ -125,21 +139,16 @@ async function testReadTelemetry(jwt) {
     if (response.status === 200) {
       log('✓ Telemetría leída exitosamente', 'green');
 
-      if (response.data.distance && response.data.distance.length > 0) {
-        const distanceData = response.data.distance[0];
-        log(`  Distance: ${distanceData.value} cm`, 'green');
-        log(`  Timestamp: ${new Date(distanceData.ts).toLocaleString()}`, 'green');
-      } else {
-        log('  ⚠ No hay datos de distancia', 'yellow');
-      }
+      TELEMETRY_KEYS.forEach((key) => {
+        if (response.data[key] && response.data[key].length > 0) {
+          const telemetry = response.data[key][0];
+          log(`  ${key}: ${telemetry.value}`, 'green');
+          log(`  Timestamp: ${new Date(telemetry.ts).toLocaleString()}`, 'green');
+          return;
+        }
 
-      if (response.data.presence && response.data.presence.length > 0) {
-        const presenceData = response.data.presence[0];
-        log(`  Presence: ${presenceData.value}`, 'green');
-        log(`  Timestamp: ${new Date(presenceData.ts).toLocaleString()}`, 'green');
-      } else {
-        log('  ⚠ No hay datos de presencia', 'yellow');
-      }
+        log(`  ⚠ No hay datos para ${key}`, 'yellow');
+      });
 
       return true;
     } else {
