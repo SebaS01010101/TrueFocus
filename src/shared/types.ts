@@ -6,7 +6,7 @@
  * ThingsBoard es una plataforma IoT que usamos para:
  * - Autenticación de usuarios
  * - Almacenar telemetría del Pomodoro (status, timeLeft)
- * - Leer datos de sensores (distancia, presencia)
+ * - Leer datos de sensores y scores calculados (presencia, distancia, CO2, entorno)
  * 
  * @see https://thingsboard.io/docs/reference/rest-api/
  */

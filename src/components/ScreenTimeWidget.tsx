@@ -174,8 +174,8 @@ export default function ScreenTimeWidget() {
     const heightPercent = (total / maxValue) * 100;
 
     return (
-      <div className="flex flex-col items-center flex-1">
-        <div className="relative w-full h-32 mb-1">
+      <div className="flex flex-1 flex-col items-center min-w-0">
+        <div className="relative mb-1 h-24 w-full">
           <div
             className="absolute bottom-0 w-full flex flex-col rounded-t-md overflow-hidden transition-all duration-300"
             style={{ height: `${heightPercent}%` }}
@@ -200,7 +200,7 @@ export default function ScreenTimeWidget() {
             })}
           </div>
         </div>
-        <p className="text-[10px] text-white/60 font-medium h-3">
+        <p className="h-3 text-[9px] font-medium text-white/60">
           {label || "\u00A0"}
         </p>
       </div>
@@ -208,9 +208,9 @@ export default function ScreenTimeWidget() {
   }
 
   return (
-    <div className="glass-card rounded-3xl p-4 w-full h-full text-white shadow-xl border border-white/10 flex flex-col">
+    <div className="glass-card flex h-full min-h-0 w-full flex-col overflow-hidden rounded-3xl border border-white/10 p-3.5 text-white shadow-xl">
       {/* Header */}
-      <div className="flex items-center justify-between mb-3">
+      <div className="mb-2.5 flex items-center justify-between gap-2">
         <div className="flex items-center gap-2">
           <Clock size={16} className="text-white/80" />
           <h3 className="text-sm font-semibold text-white/80">Screen Time</h3>
@@ -224,7 +224,7 @@ export default function ScreenTimeWidget() {
       </div>
 
       {/* Tabs */}
-      <div className="flex gap-2 mb-3 bg-white/10 rounded-lg p-1">
+      <div className="mb-2.5 flex gap-2 rounded-lg bg-white/10 p-1">
         <button
           onClick={() => setViewMode("daily")}
           className={`flex-1 py-1.5 rounded-md text-xs font-semibold transition-all ${
@@ -248,7 +248,7 @@ export default function ScreenTimeWidget() {
       </div>
 
       {/* Gráfico */}
-      <div className="flex-1 flex items-end justify-between gap-1 mb-3">
+      <div className="mb-2.5 flex min-h-0 flex-1 items-end justify-between gap-1 overflow-hidden">
         {viewMode === "weekly"
           ? weekDays.map((date) => {
               const dayName = parseDateKey(date)
@@ -294,7 +294,7 @@ export default function ScreenTimeWidget() {
       </div>
 
       {/* Leyenda de categorías */}
-      <div className="grid grid-cols-4 gap-1 text-[9px]">
+      <div className="grid shrink-0 grid-cols-4 gap-1 text-[8px] leading-3">
         {(Object.keys(CATEGORY_INFO) as CategoryType[])
           .filter((cat) => {
             // Solo mostrar categorías con datos
@@ -306,7 +306,7 @@ export default function ScreenTimeWidget() {
           })
           .slice(0, 4)
           .map((category) => (
-            <div key={category} className="flex items-center gap-1">
+            <div key={category} className="flex min-w-0 items-center gap-1">
               <div
                 className="w-2 h-2 rounded-sm"
                 style={{ backgroundColor: CATEGORY_INFO[category].color }}

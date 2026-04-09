@@ -17,11 +17,30 @@ import type {
  *
  * Obtenida de: GET /api/plugins/telemetry/DEVICE/{deviceId}/values/timeseries/latest
  */
+export interface TelemetryValue {
+  ts: number;
+  value: string;
+}
+
 export interface IoTDataResponse {
-  /** Sensor de distancia ultrasónico (cm) */
-  distance?: { ts: number; value: string };
-  /** Sensor de presencia (booleano como string) */
-  presence?: { ts: number; value: string };
+  /** Distancia detectada por el sensor en milímetros */
+  distanceMm?: TelemetryValue | null;
+  /** Presencia detectada por ThingsBoard */
+  presence?: TelemetryValue | null;
+  /** Temperatura ambiente en grados Celsius */
+  temperatureC?: TelemetryValue | null;
+  /** eCO2 en ppm */
+  eco2Ppm?: TelemetryValue | null;
+  /** Score global de foco calculado en ThingsBoard */
+  focusScore?: TelemetryValue | null;
+  /** Score de entorno calculado en ThingsBoard */
+  entornoScore?: TelemetryValue | null;
+  /** Score ergonómico calculado en ThingsBoard */
+  ergonomiaScore?: TelemetryValue | null;
+  /** Score de CO2 calculado en ThingsBoard */
+  co2Score?: TelemetryValue | null;
+  /** Estado del pomodoro reflejado por el dispositivo */
+  pomodoroStatus?: TelemetryValue | null;
 }
 
 /**
@@ -44,6 +63,33 @@ export interface PresenceChangedEvent {
   isPresent: boolean;
   /** Timestamp del evento */
   timestamp: number;
+}
+
+export type AlarmSeverity =
+  | "CRITICAL"
+  | "MAJOR"
+  | "MINOR"
+  | "WARNING"
+  | "INDETERMINATE";
+
+export type AlarmStatus =
+  | "ACTIVE_UNACK"
+  | "ACTIVE_ACK"
+  | "CLEARED_UNACK"
+  | "CLEARED_ACK";
+
+export interface DeviceAlarm {
+  id: string;
+  type: string;
+  severity: AlarmSeverity;
+  status: AlarmStatus;
+  createdTime: number | null;
+  startTs: number | null;
+  endTs: number | null;
+  ackTs: number | null;
+  clearTs: number | null;
+  originatorName: string | null;
+  details: unknown;
 }
 
 /**
@@ -127,6 +173,9 @@ export interface ElectronAPI {
 
   /** Obtener datos de sensores IoT desde ThingsBoard */
   getIoTData: () => Promise<IoTDataResponse | null>;
+
+  /** Obtener alarmas activas del dispositivo en ThingsBoard */
+  getActiveAlarms: () => Promise<DeviceAlarm[]>;
 
   /** Obtener estado actual del tracking */
   getTrackingStatus: () => Promise<TrackingStatus>;

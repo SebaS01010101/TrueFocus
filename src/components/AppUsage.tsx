@@ -52,41 +52,41 @@ export default function AppUsage({ apps }: AppUsageProps) {
     return `${m}m`;
   };
 
-  const topApps = apps.slice(0, 6);
+  const topApps = apps.slice(0, 4);
 
   return (
     <>
-      <div className="glass-card rounded-3xl p-4 w-full h-full text-white shadow-xl border border-white/10 transition-all duration-500 flex flex-col overflow-hidden">
-        {/* Header con botón de Screen Time */}
-        <div className="flex items-center justify-between mb-3 shrink-0">
-          <h3 className="text-sm font-semibold text-white/80">Aplicaciones</h3>
-          <button
-            onClick={() => setIsScreenTimeOpen(true)}
-            className="flex items-center gap-1.5 px-3 py-1.5 bg-white/10 hover:bg-white/20 rounded-lg transition-colors border border-white/10"
-            title="Ver tiempo en pantalla"
-          >
-            <Clock size={14} />
-            <span className="text-xs font-semibold">Screen Time</span>
-          </button>
+        <div className="glass-card flex h-full min-h-0 w-full flex-col overflow-hidden rounded-3xl border border-white/10 p-3.5 text-white shadow-xl transition-all duration-500">
+          {/* Header con botón de Screen Time */}
+          <div className="mb-2.5 flex items-center justify-between gap-2 shrink-0">
+            <h3 className="text-sm font-semibold text-white/80">Aplicaciones</h3>
+            <button
+              onClick={() => setIsScreenTimeOpen(true)}
+              className="flex items-center gap-1.5 rounded-lg border border-white/10 bg-white/10 px-2.5 py-1.5 transition-colors hover:bg-white/20"
+              title="Ver tiempo en pantalla"
+            >
+              <Clock size={14} />
+              <span className="text-xs font-semibold">Screen Time</span>
+            </button>
         </div>
 
         {/* Indicador de tracking pausado */}
         {!isPresent && (
           <div
-            className={`mb-2 bg-orange-500/20 border border-orange-400/50 rounded-lg p-2 flex items-center gap-2 text-orange-300 text-[11px] font-semibold shrink-0 ${showNotification ? "animate-pulse" : ""}`}
+            className={`mb-2 flex shrink-0 items-center gap-2 rounded-lg border border-orange-400/50 bg-orange-500/20 p-2 text-[11px] font-semibold text-orange-300 ${showNotification ? "animate-pulse" : ""}`}
           >
             <Pause size={14} className="shrink-0" />
             <span className="truncate">Tracking pausado</span>
           </div>
         )}
-        <div className="grid grid-cols-3 gap-3 flex-1 content-start overflow-y-auto pr-1">
+        <div className="grid flex-1 min-h-0 grid-cols-4 content-start gap-2.5 overflow-y-auto pr-1">
           {topApps.length > 0 ? (
             topApps.map((app) => (
               <div
                 key={app.name}
                 className="flex flex-col items-center gap-1.5 text-center group"
               >
-                <div className="w-11 h-11 bg-white/10 rounded-xl flex items-center justify-center border border-white/5 shadow-sm group-hover:bg-white/20 transition-colors p-2">
+                <div className="flex h-10 w-10 items-center justify-center rounded-xl border border-white/5 bg-white/10 p-2 shadow-sm transition-colors group-hover:bg-white/20">
                   {app.icon ? (
                     <img
                       src={app.icon}
@@ -99,30 +99,30 @@ export default function AppUsage({ apps }: AppUsageProps) {
                 </div>
                 <div className="flex flex-col w-full overflow-hidden">
                   <span
-                    className="text-xs font-bold truncate w-full"
+                    className="w-full truncate text-[11px] font-bold"
                     title={app.title}
                   >
                     {app.name}
                   </span>
-                  <span className="text-[10px] text-brand-green-100/70 font-medium font-mono">
+                  <span className="font-mono text-[10px] font-medium text-brand-green-100/70">
                     {formatTime(app.seconds)}
                   </span>
                 </div>
               </div>
             ))
           ) : (
-            <div className="col-span-3 text-center py-4 text-white/50 text-xs">
+            <div className="col-span-4 py-4 text-center text-xs text-white/50">
               Esperando actividad...
             </div>
           )}
         </div>
 
-        {apps.length > 6 && (
+        {apps.length > 4 && (
           <button
             onClick={() => setIsModalOpen(true)}
-            className="w-full mt-auto pt-2 pb-1 flex items-center justify-center gap-1 text-[11px] font-bold text-white/60 hover:text-white transition-colors border-t border-white/10 shrink-0"
+            className="mt-auto flex w-full shrink-0 items-center justify-center gap-1 border-t border-white/10 pt-2 pb-1 text-[11px] font-bold text-white/60 transition-colors hover:text-white"
           >
-            Ver más ({apps.length - 6})
+            Ver más ({apps.length - 4})
             <ChevronRight size={12} />
           </button>
         )}

@@ -24,8 +24,8 @@
  *
  * ### Leer telemetría (sensores IoT)
  * - Endpoint: GET /api/plugins/telemetry/DEVICE/{deviceId}/values/timeseries/latest
- * - Query: keys=distance,presence
- * - Respuesta: { distance: [{ ts, value }], presence: [{ ts, value }] }
+ * - Query: keys=distancia_mm,presencia,temperatura_c,eco2_ppm,...
+ * - Respuesta: pares `{ ts, value }` normalizados luego para el renderer
  */
 
 require("dotenv").config();
@@ -34,9 +34,40 @@ const { app, BrowserWindow, ipcMain } = require("electron");
 const path = require("node:path");
 const fs = require("fs");
 const axios = require("axios");
+const dbus = require("dbus-next");
+
+const { Interface } = dbus.interface;
 
 const STATS_FILE = path.join(app.getPath("userData"), "truefocus-stats.json");
-const TB_HOST = "http://iot.ceisufro.cl:8080";
+const TB_HOST = "https://thingsboard.200.13.4.217.nip.io";
+const DBUS_BRIDGE_NAME = "cl.ceisufro.TrueFocus.ActiveWindowBridge";
+const DBUS_BRIDGE_PATH = "/cl/ceisufro/TrueFocus/ActiveWindowBridge";
+const DBUS_BRIDGE_INTERFACE = "cl.ceisufro.TrueFocus.ActiveWindowBridge";
+const KWIN_SCRIPT_PLUGIN = "truefocus-active-window-tracker";
+const KWIN_SCRIPT_TEMPLATE = path.join(__dirname, "kwin-active-window.js");
+const KWIN_SCRIPT_RUNTIME = path.join(
+  app.getPath("userData"),
+  "truefocus-kwin-active-window.js",
+);
+const DESKTOP_ENTRY_DIRS = [
+  path.join(process.env.HOME || "", ".local/share/applications"),
+  "/usr/local/share/applications",
+  "/usr/share/applications",
+];
+const PRESENCE_TELEMETRY_KEY = "presencia";
+const IOT_TELEMETRY_KEYS = Object.freeze([
+  "distancia_mm",
+  PRESENCE_TELEMETRY_KEY,
+  "temperatura_c",
+  "eco2_ppm",
+  "focus_score",
+  "entorno_score",
+  "ergonomia_score",
+  "co2_score",
+  "pomodoro_status",
+]);
+const ACTIVE_ALARM_QUERY =
+  "searchStatus=ACTIVE&pageSize=20&page=0&sortProperty=createdTime&sortOrder=DESC&fetchOriginator=false";
 
 function padDatePart(value) {
   return value.toString().padStart(2, "0");
@@ -55,11 +86,413 @@ function parseDateKey(dateKey) {
   return new Date(year, month - 1, day);
 }
 
+function isPlasmaWaylandSession() {
+  const sessionType = (process.env.XDG_SESSION_TYPE || "").toLowerCase();
+  const desktop =
+    `${process.env.XDG_CURRENT_DESKTOP || ""} ${process.env.DESKTOP_SESSION || ""}`.toLowerCase();
+
+  return (
+    sessionType === "wayland" &&
+    (desktop.includes("kde") || desktop.includes("plasma"))
+  );
+}
+
+function normalizeDesktopFileId(desktopFileName) {
+  if (!desktopFileName || typeof desktopFileName !== "string") {
+    return "";
+  }
+
+  const baseName = path.basename(desktopFileName);
+  return baseName.endsWith(".desktop")
+    ? baseName.slice(0, -".desktop".length)
+    : baseName;
+}
+
+function getDesktopEntryInfo(desktopFileName) {
+  if (!desktopFileName || typeof desktopFileName !== "string") {
+    return null;
+  }
+
+  if (desktopEntryCache.has(desktopFileName)) {
+    return desktopEntryCache.get(desktopFileName);
+  }
+
+  const candidateNames = desktopFileName.endsWith(".desktop")
+    ? [desktopFileName]
+    : [desktopFileName, `${desktopFileName}.desktop`];
+
+  let desktopEntryPath = null;
+
+  if (path.isAbsolute(desktopFileName) && fs.existsSync(desktopFileName)) {
+    desktopEntryPath = desktopFileName;
+  } else {
+    for (const dir of DESKTOP_ENTRY_DIRS) {
+      if (!dir || !fs.existsSync(dir)) {
+        continue;
+      }
+
+      const matchedPath = candidateNames
+        .map((candidate) => path.join(dir, candidate))
+        .find((candidatePath) => fs.existsSync(candidatePath));
+
+      if (matchedPath) {
+        desktopEntryPath = matchedPath;
+        break;
+      }
+    }
+  }
+
+  if (!desktopEntryPath) {
+    desktopEntryCache.set(desktopFileName, null);
+    return null;
+  }
+
+  try {
+    const desktopEntry = {
+      path: desktopEntryPath,
+      name: null,
+    };
+    const lines = fs.readFileSync(desktopEntryPath, "utf-8").split(/\r?\n/);
+    let isDesktopEntrySection = false;
+
+    for (const line of lines) {
+      const trimmedLine = line.trim();
+
+      if (!trimmedLine || trimmedLine.startsWith("#")) {
+        continue;
+      }
+
+      if (/^\[.*\]$/.test(trimmedLine)) {
+        isDesktopEntrySection = trimmedLine === "[Desktop Entry]";
+        continue;
+      }
+
+      if (!isDesktopEntrySection) {
+        continue;
+      }
+
+      if (!desktopEntry.name && trimmedLine.startsWith("Name=")) {
+        desktopEntry.name = trimmedLine.slice("Name=".length).trim();
+      }
+
+      if (desktopEntry.name) {
+        break;
+      }
+    }
+
+    desktopEntryCache.set(desktopFileName, desktopEntry);
+    return desktopEntry;
+  } catch {
+    desktopEntryCache.set(desktopFileName, null);
+    return null;
+  }
+}
+
+function getProcessExecutablePath(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) {
+    return null;
+  }
+
+  if (processPathCache.has(pid)) {
+    return processPathCache.get(pid);
+  }
+
+  try {
+    const executablePath = fs.readlinkSync(`/proc/${pid}/exe`);
+    processPathCache.set(pid, executablePath);
+    return executablePath;
+  } catch {
+    processPathCache.set(pid, null);
+    return null;
+  }
+}
+
+function buildKWinTrackedWindow(payload) {
+  const desktopEntry = getDesktopEntryInfo(payload.desktopFileName);
+  const fallbackName =
+    normalizeDesktopFileId(payload.desktopFileName) ||
+    payload.resourceClass ||
+    payload.caption ||
+    "Unknown";
+
+  return {
+    name: desktopEntry?.name || fallbackName,
+    title: payload.caption || desktopEntry?.name || fallbackName,
+    appPath: getProcessExecutablePath(payload.pid),
+    desktopEntryPath: desktopEntry?.path || null,
+  };
+}
+
+async function applyKWinActiveWindowPayload(payloadJson) {
+  const revision = ++activeWindowRevision;
+
+  if (!payloadJson) {
+    currentActiveWindow = null;
+    return;
+  }
+
+  try {
+    const payload = JSON.parse(payloadJson);
+    const nextActiveWindow = buildKWinTrackedWindow(payload);
+
+    if (revision === activeWindowRevision) {
+      currentActiveWindow = nextActiveWindow;
+    }
+  } catch (error) {
+    console.error("Error al procesar ventana activa de KWin:", error.message);
+  }
+}
+
+function buildX11TrackedWindow(windowInfo) {
+  const appName = windowInfo?.owner?.name || windowInfo?.title || "Unknown";
+
+  return {
+    name: appName,
+    title: windowInfo?.title || appName,
+    appPath: windowInfo?.owner?.path || null,
+    desktopEntryPath: null,
+  };
+}
+
+async function refreshX11ActiveWindow() {
+  if (!getWindowsLib) {
+    currentActiveWindow = null;
+    return;
+  }
+
+  try {
+    const windowInfo = await getWindowsLib();
+    currentActiveWindow = windowInfo ? buildX11TrackedWindow(windowInfo) : null;
+  } catch {
+    currentActiveWindow = null;
+  }
+}
+
+async function ensureDbusBridge() {
+  if (dbusBus) {
+    return dbusBus;
+  }
+
+  const bus = dbus.sessionBus();
+  bus.on("error", (error) => {
+    console.error("Error de D-Bus:", error.message);
+  });
+
+  await bus.requestName(DBUS_BRIDGE_NAME);
+
+  if (!dbusBridgeExported) {
+    bus.export(DBUS_BRIDGE_PATH, new ActiveWindowBridge());
+    dbusBridgeExported = true;
+  }
+
+  dbusBus = bus;
+  return dbusBus;
+}
+
+function writeKWinScriptRuntimeFile() {
+  const template = fs.readFileSync(KWIN_SCRIPT_TEMPLATE, "utf-8");
+  const runtimeScript = template
+    .replaceAll("__DBUS_SERVICE__", DBUS_BRIDGE_NAME)
+    .replaceAll("__DBUS_PATH__", DBUS_BRIDGE_PATH)
+    .replaceAll("__DBUS_INTERFACE__", DBUS_BRIDGE_INTERFACE);
+
+  fs.writeFileSync(KWIN_SCRIPT_RUNTIME, runtimeScript);
+  return KWIN_SCRIPT_RUNTIME;
+}
+
+async function startKWinActiveWindowProvider() {
+  try {
+    const bus = await ensureDbusBridge();
+    const scriptPath = writeKWinScriptRuntimeFile();
+    const scriptingObject = await bus.getProxyObject(
+      "org.kde.KWin",
+      "/Scripting",
+    );
+
+    kwinScripting = scriptingObject.getInterface("org.kde.kwin.Scripting");
+
+    try {
+      await kwinScripting.unloadScript(KWIN_SCRIPT_PLUGIN);
+    } catch {
+      /* Script previo no cargado */
+    }
+
+    const loadScriptReply = await bus.call(
+      new dbus.Message({
+        destination: "org.kde.KWin",
+        path: "/Scripting",
+        interface: "org.kde.kwin.Scripting",
+        member: "loadScript",
+        signature: "ss",
+        body: [scriptPath, KWIN_SCRIPT_PLUGIN],
+      }),
+    );
+    const scriptId = loadScriptReply.body[0];
+    const scriptObject = await bus.getProxyObject(
+      "org.kde.KWin",
+      `/Scripting/Script${scriptId}`,
+    );
+    const scriptInterface = scriptObject.getInterface("org.kde.kwin.Script");
+
+    await scriptInterface.run();
+
+    return {
+      type: "kwin",
+      refresh: async () => {},
+      stop: async () => {
+        currentActiveWindow = null;
+
+        if (!kwinScripting) {
+          return;
+        }
+
+        try {
+          await kwinScripting.unloadScript(KWIN_SCRIPT_PLUGIN);
+        } catch {
+          /* Script ya descargado */
+        }
+      },
+    };
+  } catch (error) {
+    console.error("No se pudo iniciar tracking con KWin:", error.message);
+    return null;
+  }
+}
+
+async function startX11ActiveWindowProvider() {
+  if (!getWindowsLib) {
+    try {
+      const mod = await import("get-windows");
+      getWindowsLib = mod.activeWindow || mod.default?.activeWindow;
+    } catch {
+      return null;
+    }
+  }
+
+  return {
+    type: "x11",
+    refresh: refreshX11ActiveWindow,
+    stop: async () => {
+      currentActiveWindow = null;
+    },
+  };
+}
+
+async function startActiveWindowProvider() {
+  if (isPlasmaWaylandSession()) {
+    const kwinProvider = await startKWinActiveWindowProvider();
+
+    if (kwinProvider) {
+      console.log("Tracking activo usando KWin en Plasma Wayland");
+      return kwinProvider;
+    }
+
+    console.warn("Fallback a get-windows tras fallo de KWin");
+  }
+
+  const x11Provider = await startX11ActiveWindowProvider();
+
+  if (x11Provider) {
+    console.log("Tracking activo usando get-windows");
+  }
+
+  return x11Provider;
+}
+
+async function stopActiveWindowProvider() {
+  if (activeWindowProvider?.stop) {
+    await activeWindowProvider.stop();
+  }
+
+  activeWindowProvider = null;
+  currentActiveWindow = null;
+}
+
+async function resolveTrackedWindowIcon(trackedWindow, currentHourStats) {
+  const existingIcon = currentHourStats[trackedWindow.name]?.icon;
+  if (existingIcon) {
+    return existingIcon;
+  }
+
+  const iconSources = [
+    trackedWindow.desktopEntryPath,
+    trackedWindow.appPath,
+  ].filter(Boolean);
+
+  for (const iconSource of iconSources) {
+    const cachedIcon = iconCache.get(iconSource);
+    if (cachedIcon) {
+      return cachedIcon;
+    }
+  }
+
+  for (const iconSource of iconSources) {
+    try {
+      const nativeIcon = await app.getFileIcon(iconSource);
+      if (!nativeIcon.isEmpty()) {
+        const iconDataUrl = nativeIcon.toDataURL();
+        iconCache.set(iconSource, iconDataUrl);
+        return iconDataUrl;
+      }
+    } catch {
+      /* No se pudo resolver el icono */
+    }
+  }
+
+  return null;
+}
+
+async function recordActiveWindowUsage(trackedWindow) {
+  const currentHourStats = getCurrentHourStats();
+  const iconDataUrl = await resolveTrackedWindowIcon(
+    trackedWindow,
+    currentHourStats,
+  );
+
+  if (!currentHourStats[trackedWindow.name]) {
+    currentHourStats[trackedWindow.name] = {
+      name: trackedWindow.name,
+      title: trackedWindow.title,
+      icon: iconDataUrl,
+      seconds: 0,
+      lastActive: Date.now(),
+    };
+  }
+
+  currentHourStats[trackedWindow.name].seconds += 1;
+  currentHourStats[trackedWindow.name].lastActive = Date.now();
+  currentHourStats[trackedWindow.name].title = trackedWindow.title;
+
+  if (iconDataUrl && !currentHourStats[trackedWindow.name].icon) {
+    currentHourStats[trackedWindow.name].icon = iconDataUrl;
+  }
+}
+
+function getAggregatedStatsForCurrentDay() {
+  const allHoursToday = getTodayAllHours();
+  const aggregatedStats = {};
+
+  for (const hour in allHoursToday) {
+    for (const appName in allHoursToday[hour]) {
+      if (!aggregatedStats[appName]) {
+        aggregatedStats[appName] = {
+          ...allHoursToday[hour][appName],
+          seconds: 0,
+        };
+      }
+
+      aggregatedStats[appName].seconds += allHoursToday[hour][appName].seconds;
+    }
+  }
+
+  return Object.values(aggregatedStats).sort((a, b) => b.seconds - a.seconds);
+}
+
 // Configuración del dispositivo IoT TrueFocus
 const DEVICE_CONFIG = {
-  id: "76f07260-cb35-11f0-a6b4-77216114eb61",
-  accessToken: "354ee7omsirwgui3zdzx",
-  name: "Prototipo-TrueFocus",
+  id: "816cb4f0-31b6-11f1-bf6b-e981cdecdeb1",
+  accessToken: "4kwdakvsfqg08rl5wngz",
+  name: "truefocus-desk-1",
 };
 
 // Modo desarrollo - Auto-login
@@ -77,14 +510,122 @@ let currentDeviceId = DEVICE_CONFIG.id; // Usar ID directo del dispositivo
 let hasPresenceData = false;
 let isPollingPresence = false;
 let isTrackingActiveWindow = false;
+let activeWindowProvider = null;
+let currentActiveWindow = null;
+let activeWindowRevision = 0;
+let dbusBus = null;
+let dbusBridgeExported = false;
+let kwinScripting = null;
 
 // Nueva estructura: { "YYYY-MM-DD": { "HH": { appName: { name, title, icon, seconds, lastActive } } } }
 const appUsageStatsByDay = {};
 const iconCache = new Map();
+const desktopEntryCache = new Map();
+const processPathCache = new Map();
 let currentPresence = false; // Estado de presencia actual
 let lastPresenceState = false; // Para detectar cambios
 let currentDateKey = getDateKey();
 const ALLOWED_RPC_METHODS = new Set(["setSessionState"]);
+
+class ActiveWindowBridge extends Interface {
+  constructor() {
+    super(DBUS_BRIDGE_INTERFACE);
+  }
+
+  UpdateActiveWindow(payloadJson) {
+    void applyKWinActiveWindowPayload(payloadJson);
+    return true;
+  }
+}
+
+ActiveWindowBridge.configureMembers({
+  methods: {
+    UpdateActiveWindow: {
+      inSignature: "s",
+      outSignature: "b",
+    },
+  },
+});
+
+function getLatestTelemetryEntry(data, key) {
+  if (!data || !Array.isArray(data[key])) {
+    return null;
+  }
+
+  return data[key][0] ?? null;
+}
+
+function parseTelemetryBoolean(entry) {
+  if (!entry || typeof entry.value !== "string") {
+    return false;
+  }
+
+  return entry.value === "true" || entry.value === "1";
+}
+
+async function fetchDeviceTelemetry(keys) {
+  if (!currentUserJwt || !currentDeviceId) {
+    return null;
+  }
+
+  const url = `${TB_HOST}/api/plugins/telemetry/DEVICE/${currentDeviceId}/values/timeseries?keys=${keys.join(",")}`;
+  const response = await axios.get(url, {
+    headers: { "X-Authorization": `Bearer ${currentUserJwt}` },
+  });
+
+  return response.data;
+}
+
+function normalizeIoTDataResponse(data) {
+  if (!data) {
+    return null;
+  }
+
+  return {
+    distanceMm: getLatestTelemetryEntry(data, "distancia_mm"),
+    presence: getLatestTelemetryEntry(data, PRESENCE_TELEMETRY_KEY),
+    temperatureC: getLatestTelemetryEntry(data, "temperatura_c"),
+    eco2Ppm: getLatestTelemetryEntry(data, "eco2_ppm"),
+    focusScore: getLatestTelemetryEntry(data, "focus_score"),
+    entornoScore: getLatestTelemetryEntry(data, "entorno_score"),
+    ergonomiaScore: getLatestTelemetryEntry(data, "ergonomia_score"),
+    co2Score: getLatestTelemetryEntry(data, "co2_score"),
+    pomodoroStatus: getLatestTelemetryEntry(data, "pomodoro_status"),
+  };
+}
+
+async function fetchActiveDeviceAlarms() {
+  if (!currentUserJwt || !currentDeviceId) {
+    return [];
+  }
+
+  const url = `${TB_HOST}/api/alarm/DEVICE/${currentDeviceId}?${ACTIVE_ALARM_QUERY}`;
+  const response = await axios.get(url, {
+    headers: { "X-Authorization": `Bearer ${currentUserJwt}` },
+  });
+
+  return Array.isArray(response.data?.data) ? response.data.data : [];
+}
+
+function normalizeAlarmResponse(alarm) {
+  if (!alarm || typeof alarm !== "object") {
+    return null;
+  }
+
+  return {
+    id: alarm.id?.id || "",
+    type: alarm.type || "UNKNOWN_ALARM",
+    severity: alarm.severity || "WARNING",
+    status: alarm.status || "ACTIVE_UNACK",
+    createdTime: alarm.createdTime || alarm.startTs || null,
+    startTs: alarm.startTs || alarm.createdTime || null,
+    endTs: alarm.endTs || null,
+    ackTs: alarm.ackTs || null,
+    clearTs: alarm.clearTs || null,
+    originatorName: alarm.originatorName || null,
+    details: alarm.details || null,
+  };
+}
 
 function isValidRpcCommand(command) {
   if (!command || typeof command !== "object") {
@@ -190,8 +731,10 @@ const isDev = !app.isPackaged;
 
 function createWindow() {
   mainWindow = new BrowserWindow({
-    width: 950,
-    height: 720,
+    width: 820,
+    height: 640,
+    minWidth: 760,
+    minHeight: 620,
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
@@ -232,15 +775,7 @@ function createWindow() {
 
 async function startAppTracking() {
   loadStats();
-
-  if (!getWindowsLib) {
-    try {
-      const mod = await import("get-windows");
-      getWindowsLib = mod.activeWindow || mod.default?.activeWindow;
-    } catch {
-      return;
-    }
-  }
+  activeWindowProvider = await startActiveWindowProvider();
 
   // Verificar presencia cada 2 segundos
   setInterval(async () => {
@@ -249,15 +784,15 @@ async function startAppTracking() {
       isPollingPresence = true;
 
       try {
-        const url = `${TB_HOST}/api/plugins/telemetry/DEVICE/${currentDeviceId}/values/timeseries?keys=presence`;
-        const resp = await axios.get(url, {
-          headers: { "X-Authorization": `Bearer ${currentUserJwt}` },
-        });
+        const telemetry = await fetchDeviceTelemetry([PRESENCE_TELEMETRY_KEY]);
+        const presenceEntry = getLatestTelemetryEntry(
+          telemetry,
+          PRESENCE_TELEMETRY_KEY,
+        );
 
-        if (resp.data.presence && resp.data.presence[0]) {
+        if (presenceEntry) {
           hasPresenceData = true;
-          const presenceValue = resp.data.presence[0].value;
-          currentPresence = presenceValue === "true" || presenceValue === "1";
+          currentPresence = parseTelemetryBoolean(presenceEntry);
 
           // Notificar al renderer si cambió el estado
           if (currentPresence !== lastPresenceState) {
@@ -311,68 +846,20 @@ async function startAppTracking() {
       // Solo trackear si hay presencia detectada
       if (!currentPresence) return;
 
-      if (!mainWindow || mainWindow.isDestroyed() || !getWindowsLib) return;
+      if (!mainWindow || mainWindow.isDestroyed()) return;
 
-      const windowInfo = await getWindowsLib();
-      if (!windowInfo) return;
-
-      const appPath = windowInfo.owner.path;
-      const appName = windowInfo.owner.name;
-      const windowTitle = windowInfo.title;
-
-      const currentHourStats = getCurrentHourStats();
-
-      let iconDataUrl = iconCache.get(appPath);
-      if (!iconDataUrl && currentHourStats[appName]?.icon) {
-        iconDataUrl = currentHourStats[appName].icon;
-        iconCache.set(appPath, iconDataUrl);
+      if (activeWindowProvider?.refresh) {
+        await activeWindowProvider.refresh();
       }
 
-      if (!iconDataUrl) {
-        try {
-          const nativeIcon = await app.getFileIcon(appPath);
-          if (!nativeIcon.isEmpty()) {
-            iconDataUrl = nativeIcon.toDataURL();
-            iconCache.set(appPath, iconDataUrl);
-          }
-        } catch (e) {}
-      }
+      if (!currentActiveWindow) return;
 
-      if (!currentHourStats[appName]) {
-        currentHourStats[appName] = {
-          name: appName,
-          title: windowTitle,
-          icon: iconDataUrl || null,
-          seconds: 0,
-          lastActive: Date.now(),
-        };
-      }
+      await recordActiveWindowUsage(currentActiveWindow);
 
-      currentHourStats[appName].seconds += 1;
-      currentHourStats[appName].lastActive = Date.now();
-      currentHourStats[appName].title = windowTitle;
-
-      if (iconDataUrl && !currentHourStats[appName].icon) {
-        currentHourStats[appName].icon = iconDataUrl;
-      }
-
-      // Obtener stats agregadas del día completo para el display
-      const allHoursToday = getTodayAllHours();
-      const aggregatedStats = {};
-
-      for (const hour in allHoursToday) {
-        for (const app in allHoursToday[hour]) {
-          if (!aggregatedStats[app]) {
-            aggregatedStats[app] = { ...allHoursToday[hour][app], seconds: 0 };
-          }
-          aggregatedStats[app].seconds += allHoursToday[hour][app].seconds;
-        }
-      }
-
-      const sortedStats = Object.values(aggregatedStats).sort(
-        (a, b) => b.seconds - a.seconds,
+      mainWindow.webContents.send(
+        "app-usage:update",
+        getAggregatedStatsForCurrentDay(),
       );
-      mainWindow.webContents.send("app-usage:update", sortedStats);
     } catch {
       /* Ventana no disponible */
     } finally {
@@ -385,7 +872,11 @@ async function startAppTracking() {
 
 app.whenReady().then(() => {
   createWindow();
-  startAppTracking();
+  void startAppTracking();
+});
+
+app.on("before-quit", () => {
+  void stopActiveWindowProvider();
 });
 
 app.on("window-all-closed", () => {
@@ -443,19 +934,22 @@ ipcMain.handle("iot:get-data", async () => {
   if (!currentUserJwt || !currentDeviceId) return null;
 
   try {
-    // Leer telemetría usando el endpoint de plugins con autenticación JWT
-    const url = `${TB_HOST}/api/plugins/telemetry/DEVICE/${currentDeviceId}/values/timeseries?keys=distance,presence`;
-    const resp = await axios.get(url, {
-      headers: { "X-Authorization": `Bearer ${currentUserJwt}` },
-    });
-
-    return {
-      distance: resp.data.distance?.[0] ?? null,
-      presence: resp.data.presence?.[0] ?? null,
-    };
+    const telemetry = await fetchDeviceTelemetry(IOT_TELEMETRY_KEYS);
+    return normalizeIoTDataResponse(telemetry);
   } catch (error) {
     console.error("Error al obtener datos IoT:", error.message);
     return null;
+  }
+});
+
+// IPC: Obtener alarmas activas desde ThingsBoard
+ipcMain.handle("alarms:get-active", async () => {
+  try {
+    const alarms = await fetchActiveDeviceAlarms();
+    return alarms.map(normalizeAlarmResponse).filter(Boolean);
+  } catch (error) {
+    console.error("Error al obtener alarmas activas:", error.message);
+    return [];
   }
 });
 

@@ -10,6 +10,7 @@ contextBridge.exposeInMainWorld("api", {
   login: (credentials) => ipcRenderer.invoke("auth:login", credentials),
   sendPomodoroUpdate: (data) => ipcRenderer.invoke("telemetry:send", data),
   getIoTData: () => ipcRenderer.invoke("iot:get-data"),
+  getActiveAlarms: () => ipcRenderer.invoke("alarms:get-active"),
   getTrackingStatus: () => ipcRenderer.invoke("tracking:get-status"),
   getDevMode: () => ipcRenderer.invoke("dev:get-mode"),
   sendRpcCommand: (command) => ipcRenderer.invoke("rpc:send-command", command),

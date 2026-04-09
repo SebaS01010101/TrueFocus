@@ -9,19 +9,34 @@ import {
   Armchair,
   UserX,
   Bug,
+  TriangleAlert,
 } from "lucide-react";
+import type { WidgetNoticeDraft, WidgetNoticeSeverity } from "./WidgetNoticeCenter";
 import type { PomodoroTelemetry, PomodoroSettings } from "../shared/types";
 import { usePresenceStatus } from "../usePresenceStatus";
 
 interface PomodoroProps {
+  alarmBlockingReason?: "CO2_CRITICO" | null;
+  criticalAlarmActive?: boolean;
   onCycleComplete?: () => void;
   settings: PomodoroSettings;
   currentCycle: number;
+  onNotice?: (notice: WidgetNoticeDraft) => void;
+  onStateChange?: (state: { mode: TimerMode; isActive: boolean }) => void;
 }
 
 type TimerMode = "WORK" | "BREAK";
+type AutoPauseReason = "presence" | "break_presence" | "critical_alarm" | null;
 
-function Pomodoro({ onCycleComplete, settings, currentCycle }: PomodoroProps) {
+function Pomodoro({
+  alarmBlockingReason = null,
+  criticalAlarmActive = false,
+  onCycleComplete,
+  settings,
+  currentCycle,
+  onNotice,
+  onStateChange,
+}: PomodoroProps) {
   const { isPresent, hasLoaded } = usePresenceStatus(true);
   const workDurationMinutes = Math.max(1, settings.workDuration);
   const shortBreakDurationMinutes = Math.max(1, settings.shortBreakDuration);
@@ -29,7 +44,7 @@ function Pomodoro({ onCycleComplete, settings, currentCycle }: PomodoroProps) {
   const [timeLeft, setTimeLeft] = useState(workDurationMinutes * 60);
   const [isActive, setIsActive] = useState(false);
   const [mode, setMode] = useState<TimerMode>("WORK");
-  const [wasAutoPaused, setWasAutoPaused] = useState<boolean>(false);
+  const [autoPauseReason, setAutoPauseReason] = useState<AutoPauseReason>(null);
   const [wasManuallyStarted, setWasManuallyStarted] = useState<boolean>(false);
   const [debugMode, setDebugMode] = useState<boolean>(false);
   const [iotDebugData, setIotDebugData] = useState<unknown>(null);
@@ -37,19 +52,22 @@ function Pomodoro({ onCycleComplete, settings, currentCycle }: PomodoroProps) {
   const [presenceDuringBreak, setPresenceDuringBreak] = useState<number>(0);
   const [breakWarningShown, setBreakWarningShown] = useState<boolean>(false);
 
+  const wasAutoPaused = autoPauseReason !== null;
+
   // Refs para mantener valores actualizados sin reiniciar el efecto
   const isActiveRef = useRef(isActive);
-  const wasPausedRef = useRef(wasAutoPaused);
+  const autoPauseReasonRef = useRef(autoPauseReason);
   const modeRef = useRef(mode);
   const timeLeftRef = useRef(timeLeft);
   const isPresentRef = useRef(isPresent);
   const hasLoadedRef = useRef(hasLoaded);
   const warningShownRef = useRef(breakWarningShown);
+  const previousAlarmBlockingReasonRef = useRef<typeof alarmBlockingReason>(null);
 
   // Actualizar refs cuando cambian los estados
   useEffect(() => {
     isActiveRef.current = isActive;
-    wasPausedRef.current = wasAutoPaused;
+    autoPauseReasonRef.current = autoPauseReason;
     modeRef.current = mode;
     timeLeftRef.current = timeLeft;
     isPresentRef.current = isPresent;
@@ -57,7 +75,7 @@ function Pomodoro({ onCycleComplete, settings, currentCycle }: PomodoroProps) {
     warningShownRef.current = breakWarningShown;
   }, [
     isActive,
-    wasAutoPaused,
+    autoPauseReason,
     mode,
     timeLeft,
     isPresent,
@@ -65,6 +83,10 @@ function Pomodoro({ onCycleComplete, settings, currentCycle }: PomodoroProps) {
     presenceDuringBreak,
     breakWarningShown,
   ]);
+
+  useEffect(() => {
+    onStateChange?.({ mode, isActive });
+  }, [isActive, mode, onStateChange]);
 
   const isLongBreak =
     mode === "WORK"
@@ -130,12 +152,41 @@ function Pomodoro({ onCycleComplete, settings, currentCycle }: PomodoroProps) {
   };
 
   // Notificar al usuario con sonido y notificación del sistema
-  const notifyUser = useCallback((message: string) => {
-    playNotificationSound();
-    if (Notification.permission === "granted") {
-      new Notification("TrueFocus", { body: message, silent: true });
-    }
-  }, []);
+  const notifyUser = useCallback(
+    (
+      message: string,
+      options?: {
+        title?: string;
+        severity?: WidgetNoticeSeverity;
+        system?: boolean;
+        ttlMs?: number;
+        dedupeKey?: string;
+      },
+    ) => {
+      playNotificationSound();
+
+      if (onNotice) {
+        onNotice({
+          title: options?.title || "Pomodoro",
+          message,
+          severity: options?.severity || "info",
+          source: "Pomodoro",
+          system: options?.system,
+          ttlMs: options?.ttlMs,
+          dedupeKey: options?.dedupeKey,
+        });
+        return;
+      }
+
+      if (Notification.permission === "granted") {
+        new Notification("TrueFocus", {
+          body: message,
+          silent: !(options?.system ?? false),
+        });
+      }
+    },
+    [onNotice],
+  );
 
   // Enviar comando RPC al Arduino
   const sendRpcToArduino = useCallback(
@@ -234,22 +285,51 @@ function Pomodoro({ onCycleComplete, settings, currentCycle }: PomodoroProps) {
 
       if (!event.isPresent && isActiveRef.current) {
         setIsActive(false);
-        setWasAutoPaused(true);
+        setAutoPauseReason("presence");
         sendPomodoroUpdate("PAUSED", timeLeftRef.current);
-        notifyUser("⚠️ Ausencia detectada. Timer pausado automáticamente.");
+        notifyUser("Ausencia detectada. Timer pausado automáticamente.", {
+          title: "Trabajo pausado",
+          severity: "warning",
+          system: true,
+          dedupeKey: "pomodoro-work-absence-paused",
+        });
         return;
       }
 
-      if (event.isPresent && wasPausedRef.current && !isActiveRef.current) {
+      if (
+        event.isPresent &&
+        autoPauseReasonRef.current === "presence" &&
+        !isActiveRef.current
+      ) {
         setIsActive(true);
-        setWasAutoPaused(false);
+        setAutoPauseReason(null);
         sendPomodoroUpdate("RUNNING", timeLeftRef.current);
-        notifyUser("✅ Presencia detectada. Timer reanudado.");
+        notifyUser("Presencia detectada. Timer reanudado.", {
+          title: "Trabajo reanudado",
+          severity: "success",
+          dedupeKey: "pomodoro-work-resumed",
+        });
       }
     });
 
     return () => unsubscribe();
   }, [notifyUser, sendPomodoroUpdate]);
+
+  useEffect(() => {
+    if (mode !== "WORK" || !hasLoaded || isPresent || !isActive) {
+      return;
+    }
+
+    setIsActive(false);
+    setAutoPauseReason("presence");
+    sendPomodoroUpdate("PAUSED", timeLeft);
+    notifyUser("Ausencia detectada. Timer pausado automáticamente.", {
+      title: "Trabajo pausado",
+      severity: "warning",
+      system: true,
+      dedupeKey: "pomodoro-work-absence-paused",
+    });
+  }, [hasLoaded, isActive, isPresent, mode, notifyUser, sendPomodoroUpdate, timeLeft]);
 
   useEffect(() => {
     if (mode !== "BREAK") return;
@@ -263,7 +343,12 @@ function Pomodoro({ onCycleComplete, settings, currentCycle }: PomodoroProps) {
 
           if (newCount === 1 && !warningShownRef.current) {
             notifyUser(
-              "⏸️ Estás en descanso. Aléjate del PC para aprovechar tu pausa.",
+              "Estas en descanso. Alejate del PC para aprovechar la pausa.",
+              {
+                title: "Recordatorio de descanso",
+                severity: "info",
+                dedupeKey: "pomodoro-break-presence-warning",
+              },
             );
             setBreakWarningShown(true);
             sendRpcToArduino("WARNING", timeLeftRef.current);
@@ -271,10 +356,15 @@ function Pomodoro({ onCycleComplete, settings, currentCycle }: PomodoroProps) {
 
           if (newCount >= 3) {
             setIsActive(false);
-            setWasAutoPaused(true);
+            setAutoPauseReason("break_presence");
             sendPomodoroUpdate("PAUSED", timeLeftRef.current);
             notifyUser(
-              "⏸️ Descanso pausado. Recuerda: los descansos son importantes para tu productividad.",
+              "Descanso pausado. Los descansos lejos del PC ayudan a tu productividad.",
+              {
+                title: "Descanso pausado",
+                severity: "warning",
+                dedupeKey: "pomodoro-break-paused",
+              },
             );
             setBreakWarningShown(false);
             return 0;
@@ -287,11 +377,18 @@ function Pomodoro({ onCycleComplete, settings, currentCycle }: PomodoroProps) {
       }
 
       if (!isPresentRef.current) {
-        if (wasPausedRef.current && !isActiveRef.current) {
+        if (
+          autoPauseReasonRef.current === "break_presence" &&
+          !isActiveRef.current
+        ) {
           setIsActive(true);
-          setWasAutoPaused(false);
+          setAutoPauseReason(null);
           sendPomodoroUpdate("RUNNING", timeLeftRef.current);
-          notifyUser("✅ Ausencia detectada. Descanso reanudado.");
+          notifyUser("Te alejaste del PC. Descanso reanudado.", {
+            title: "Descanso reanudado",
+            severity: "success",
+            dedupeKey: "pomodoro-break-resumed",
+          });
         } else if (warningShownRef.current && isActiveRef.current) {
           sendRpcToArduino("RUNNING", timeLeftRef.current);
         }
@@ -304,10 +401,54 @@ function Pomodoro({ onCycleComplete, settings, currentCycle }: PomodoroProps) {
     return () => clearInterval(interval);
   }, [hasLoaded, mode, notifyUser, sendPomodoroUpdate, sendRpcToArduino]);
 
+  useEffect(() => {
+    const previousReason = previousAlarmBlockingReasonRef.current;
+    previousAlarmBlockingReasonRef.current = alarmBlockingReason;
+
+    if (
+      previousReason === "CO2_CRITICO" &&
+      alarmBlockingReason !== "CO2_CRITICO" &&
+      autoPauseReasonRef.current === "critical_alarm" &&
+      !isActiveRef.current
+    ) {
+      notifyUser("La alarma critica se despejo. Puedes reanudar manualmente.", {
+        title: "Alarma critica resuelta",
+        severity: "success",
+        system: true,
+        dedupeKey: "pomodoro-critical-alarm-cleared",
+      });
+    }
+
+    if (!alarmBlockingReason || !isActiveRef.current) {
+      return;
+    }
+
+    if (alarmBlockingReason === "CO2_CRITICO") {
+      setIsActive(false);
+      setAutoPauseReason("critical_alarm");
+      sendPomodoroUpdate("PAUSED", timeLeftRef.current);
+      notifyUser(
+        "CO2 critico detectado. Pomodoro pausado hasta que revises el ambiente.",
+        {
+          title: "CO2 critico",
+          severity: "critical",
+          system: true,
+          dedupeKey: "pomodoro-critical-alarm-pause",
+          ttlMs: 9000,
+        },
+      );
+      return;
+    }
+
+  }, [alarmBlockingReason, notifyUser, sendPomodoroUpdate]);
+
   const handleTimerComplete = useCallback(() => {
     sendPomodoroUpdate("COMPLETED", 0);
 
     let nextMode: TimerMode = mode;
+    let nextTime = 0;
+    let nextIsActive = true;
+    let nextAutoPauseReason: AutoPauseReason = null;
 
     if (mode === "WORK") {
       if (onCycleComplete) onCycleComplete();
@@ -315,26 +456,49 @@ function Pomodoro({ onCycleComplete, settings, currentCycle }: PomodoroProps) {
 
       const cyclesCompleted = currentCycle + 1;
       const isLong = cyclesCompleted % 4 === 0;
+      nextTime = isLong
+        ? longBreakDurationMinutes * 60
+        : shortBreakDurationMinutes * 60;
 
-      setTimeLeft(
-        isLong
-          ? longBreakDurationMinutes * 60
-          : shortBreakDurationMinutes * 60,
-      );
       notifyUser(
-        isLong ? "¡Gran trabajo! Toca descanso largo." : "Descanso corto.",
+        isLong ? "Gran trabajo. Toca un descanso largo." : "Empieza tu descanso corto.",
+        {
+          title: "Sesion completada",
+          severity: "success",
+          dedupeKey: isLong
+            ? "pomodoro-break-long-start"
+            : "pomodoro-break-short-start",
+        },
       );
-
-      // Resetear contadores de descanso
-      setPresenceDuringBreak(0);
-      setBreakWarningShown(false);
     } else {
       nextMode = "WORK";
-      setTimeLeft(workDurationMinutes * 60);
-      notifyUser("¡A trabajar!");
+      nextTime = workDurationMinutes * 60;
+
+      if (hasLoadedRef.current && !isPresentRef.current) {
+        nextIsActive = false;
+        nextAutoPauseReason = "presence";
+        notifyUser("Descanso completado. El trabajo queda en pausa porque sigues ausente.", {
+          title: "Trabajo en espera",
+          severity: "warning",
+          system: true,
+          dedupeKey: "pomodoro-work-paused-after-break",
+        });
+      } else {
+        notifyUser("Es momento de volver al trabajo.", {
+          title: "Vuelta al foco",
+          severity: "success",
+          dedupeKey: "pomodoro-work-start",
+        });
+      }
     }
 
+    setTimeLeft(nextTime);
+    setIsActive(nextIsActive);
+    setAutoPauseReason(nextAutoPauseReason);
+    setPresenceDuringBreak(0);
+    setBreakWarningShown(false);
     setMode(nextMode);
+    sendPomodoroUpdate(nextIsActive ? "RUNNING" : "PAUSED", nextTime);
   }, [
     mode,
     sendPomodoroUpdate,
@@ -372,9 +536,23 @@ function Pomodoro({ onCycleComplete, settings, currentCycle }: PomodoroProps) {
   const toggleTimer = () => {
     // Si el usuario pausa manualmente, cancelar el estado de pausa automática
     if (isActive) {
-      setWasAutoPaused(false);
+      setAutoPauseReason(null);
     } else {
+      if (criticalAlarmActive) {
+        notifyUser(
+          "No puedes reanudar mientras siga activa una alarma critica de CO2.",
+          {
+            title: "CO2 critico",
+            severity: "critical",
+            system: true,
+            dedupeKey: "pomodoro-critical-alarm-start-blocked",
+          },
+        );
+        return;
+      }
+
       // Si el usuario inicia manualmente, marcarlo
+      setAutoPauseReason(null);
       setWasManuallyStarted(true);
     }
 
@@ -385,7 +563,7 @@ function Pomodoro({ onCycleComplete, settings, currentCycle }: PomodoroProps) {
 
   const resetTimer = () => {
     setIsActive(false);
-    setWasAutoPaused(false);
+    setAutoPauseReason(null);
     setWasManuallyStarted(false);
     setTimeLeft(targetTime);
     sendPomodoroUpdate("IDLE", targetTime);
@@ -407,7 +585,7 @@ function Pomodoro({ onCycleComplete, settings, currentCycle }: PomodoroProps) {
     }
 
     setIsActive(false);
-    setWasAutoPaused(false);
+    setAutoPauseReason(null);
     setPresenceDuringBreak(0);
     setBreakWarningShown(false);
     sendPomodoroUpdate("IDLE", 0);
@@ -426,11 +604,11 @@ function Pomodoro({ onCycleComplete, settings, currentCycle }: PomodoroProps) {
       : 0;
 
   return (
-    <div className="glass-card rounded-3xl flex flex-col items-center justify-between w-full h-full p-5 transition-all duration-300">
+    <div className="glass-card relative flex h-full min-h-0 w-full flex-col items-center justify-between overflow-hidden rounded-3xl p-4 transition-all duration-300">
       {/* Botón Debug */}
       <button
         onClick={() => setDebugMode(!debugMode)}
-        className={`absolute top-2 right-2 p-1.5 rounded-lg transition-all z-10 ${debugMode ? "bg-yellow-500/20 text-yellow-300" : "bg-white/5 text-white/50 hover:bg-white/10"}`}
+        className={`absolute top-3 right-3 z-10 rounded-lg p-1.5 transition-all ${debugMode ? "bg-yellow-500/20 text-yellow-300" : "bg-white/5 text-white/50 hover:bg-white/10"}`}
         title="Modo Debug IoT"
       >
         <Bug size={16} />
@@ -438,7 +616,7 @@ function Pomodoro({ onCycleComplete, settings, currentCycle }: PomodoroProps) {
 
       {/* Panel Debug IoT */}
       {debugMode && (
-        <div className="absolute top-12 right-2 bg-black/90 backdrop-blur-md rounded-xl p-3 text-xs font-mono text-white w-72 max-h-64 overflow-auto z-10 border border-white/20 shadow-xl dark-scrollbar">
+        <div className="absolute top-12 right-2 z-10 max-h-56 w-64 overflow-auto rounded-xl border border-white/20 bg-black/90 p-3 text-xs font-mono text-white shadow-xl backdrop-blur-md dark-scrollbar">
           <div className="text-yellow-300 font-bold mb-2">
             🐛 DEBUG - IoT Connection
           </div>
@@ -446,6 +624,8 @@ function Pomodoro({ onCycleComplete, settings, currentCycle }: PomodoroProps) {
             <div>⏰ Last Check: {lastIotCheck}</div>
             <div>👤 Present: {isPresent ? "✓ YES" : "✗ NO"}</div>
             <div>⏸️ Auto-Paused: {wasAutoPaused ? "YES" : "NO"}</div>
+            <div>🧩 Pause Reason: {autoPauseReason || "NONE"}</div>
+            <div>🚨 Alarm Block: {alarmBlockingReason || "NONE"}</div>
             <div>🎯 Mode: {mode}</div>
             <div>▶️ Active: {isActive ? "YES" : "NO"}</div>
             {mode === "BREAK" && (
@@ -468,28 +648,38 @@ function Pomodoro({ onCycleComplete, settings, currentCycle }: PomodoroProps) {
         </div>
       )}
 
+      {/* Indicador de alarma critica */}
+      {criticalAlarmActive && (
+        <div className="mb-2 flex w-full shrink-0 items-center gap-2 rounded-2xl border border-red-300/60 bg-red-950/55 p-2 text-xs text-red-100 shadow-[0_0_18px_rgba(127,29,29,0.18)]">
+          <TriangleAlert size={18} className="shrink-0 text-red-200" />
+          <span className="font-semibold leading-4">
+            CO2 critico detectado. Revisa la ventilacion antes de reanudar.
+          </span>
+        </div>
+      )}
+
       {/* Indicador de ausencia */}
-      {!isPresent && mode === "WORK" && (
-        <div className="w-full mb-3 bg-red-500/20 border border-red-400/50 rounded-2xl p-3 flex items-center gap-2 text-red-300 text-sm animate-pulse shrink-0">
+      {!criticalAlarmActive && !isPresent && mode === "WORK" && (
+        <div className="mb-2 flex w-full shrink-0 items-center gap-2 rounded-2xl border border-red-400/50 bg-red-500/20 p-2 text-xs text-red-300 animate-pulse">
           <UserX size={18} />
-          <span className="font-semibold">
+          <span className="font-semibold leading-4">
             Ausencia detectada - Timer pausado automáticamente
           </span>
         </div>
       )}
 
       {/* TABS */}
-      <div className="bg-primary-50/20 backdrop-blur-sm p-1 rounded-full flex items-center justify-between w-full max-w-[280px] border border-white/10 shrink-0">
+      <div className="flex w-full max-w-[260px] shrink-0 items-center justify-between rounded-full border border-white/10 bg-primary-50/20 p-1 backdrop-blur-sm">
         <button
           onClick={() => {
             setMode("WORK");
             setTimeLeft(workDurationMinutes * 60);
             setIsActive(false);
-            setWasAutoPaused(false);
+            setAutoPauseReason(null);
             setPresenceDuringBreak(0);
             setBreakWarningShown(false);
           }}
-          className={`flex items-center gap-1.5 px-4 py-1.5 rounded-full transition-all duration-300 text-sm ${
+          className={`flex items-center gap-1.5 rounded-full px-3.5 py-1.5 text-xs transition-all duration-300 ${
             mode === "WORK"
               ? "bg-white text-brand-green-500 shadow-md font-bold"
               : "text-primary-100 hover:text-white"
@@ -509,11 +699,11 @@ function Pomodoro({ onCycleComplete, settings, currentCycle }: PomodoroProps) {
                 : shortBreakDurationMinutes * 60,
             );
             setIsActive(false);
-            setWasAutoPaused(false);
+            setAutoPauseReason(null);
             setPresenceDuringBreak(0);
             setBreakWarningShown(false);
           }}
-          className={`flex items-center gap-1.5 px-4 py-1.5 rounded-full transition-all duration-300 text-sm ${
+          className={`flex items-center gap-1.5 rounded-full px-3.5 py-1.5 text-xs transition-all duration-300 ${
             mode === "BREAK"
               ? "bg-white text-brand-green-500 shadow-md font-bold"
               : "text-primary-100 hover:text-white"
@@ -525,14 +715,14 @@ function Pomodoro({ onCycleComplete, settings, currentCycle }: PomodoroProps) {
       </div>
 
       {/* TIMER */}
-      <div className="flex-1 flex items-center justify-center">
-        <h1 className="text-6xl font-bold text-white tracking-wider drop-shadow-lg">
+      <div className="flex min-h-0 flex-1 items-center justify-center py-2">
+        <h1 className="text-[clamp(3.15rem,7.2vw,4.7rem)] leading-none font-bold text-white tracking-[0.04em] drop-shadow-lg">
           {formatTime(timeLeft)}
         </h1>
       </div>
 
       {/* BARRA */}
-      <div className="w-full h-1.5 bg-white/10 rounded-full mb-6 overflow-hidden border border-white/5 shrink-0">
+      <div className="mb-4 h-1.5 w-full shrink-0 overflow-hidden rounded-full border border-white/5 bg-white/10">
         <div
           className="h-full bg-brand-green-400 transition-all duration-1000 ease-linear shadow-[0_0_10px_rgba(52,211,153,0.5)]"
           style={{ width: `${progressPercent}%` }}
@@ -540,24 +730,29 @@ function Pomodoro({ onCycleComplete, settings, currentCycle }: PomodoroProps) {
       </div>
 
       {/* CONTROLES */}
-      <div className="flex items-center gap-5 shrink-0">
+      <div className="flex shrink-0 items-center gap-3">
         <button
           onClick={resetTimer}
-          className="w-10 h-10 bg-white rounded-full flex items-center justify-center text-primary-600 hover:bg-gray-100 transition shadow-lg hover:scale-105 active:scale-95"
+          className="flex h-9 w-9 items-center justify-center rounded-full bg-white text-primary-600 shadow-lg transition hover:scale-105 hover:bg-gray-100 active:scale-95"
         >
-          <RotateCcw size={20} />
+          <RotateCcw size={18} />
         </button>
 
         <button
           onClick={toggleTimer}
-          disabled={!isPresent && mode === "WORK"}
-          className={`h-12 px-6 rounded-full flex items-center gap-2 shadow-xl hover:scale-105 active:scale-95 transition-all font-bold text-base ${
-            !isPresent && mode === "WORK"
+          disabled={(!isPresent && mode === "WORK") || criticalAlarmActive}
+          className={`flex h-11 items-center gap-2 rounded-full px-5 text-sm font-bold shadow-xl transition-all hover:scale-105 active:scale-95 ${
+            ((!isPresent && mode === "WORK") || criticalAlarmActive)
               ? "bg-gray-500 cursor-not-allowed opacity-50"
               : "bg-brand-green-500 hover:bg-brand-green-400 text-white"
           }`}
         >
-          {isActive ? (
+          {criticalAlarmActive && !isActive ? (
+            <>
+              <TriangleAlert size={16} />
+              <span>Bloqueado</span>
+            </>
+          ) : isActive ? (
             <>
               <Pause fill="currentColor" size={16} />
               <span>Pausar</span>
@@ -572,9 +767,9 @@ function Pomodoro({ onCycleComplete, settings, currentCycle }: PomodoroProps) {
 
         <button
           onClick={skipTimer}
-          className="w-10 h-10 bg-white rounded-full flex items-center justify-center text-primary-600 hover:bg-gray-100 transition shadow-lg hover:scale-105 active:scale-95"
+          className="flex h-9 w-9 items-center justify-center rounded-full bg-white text-primary-600 shadow-lg transition hover:scale-105 hover:bg-gray-100 active:scale-95"
         >
-          <SkipForward fill="currentColor" size={20} />
+          <SkipForward fill="currentColor" size={18} />
         </button>
       </div>
     </div>
